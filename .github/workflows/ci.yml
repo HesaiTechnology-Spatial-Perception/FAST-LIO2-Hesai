@@ -1,0 +1,37 @@
+name: build
+
+on:
+  push:
+    branches: [main, "dev/**"]
+  pull_request:
+    branches: [main]
+
+jobs:
+  ros1-noetic:
+    runs-on: ubuntu-latest
+    container: ros:noetic-ros-base-focal
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            build-essential \
+            libeigen3-dev \
+            libpcl-dev \
+            ros-noetic-pcl-ros \
+            ros-noetic-pcl-conversions \
+            ros-noetic-std-srvs \
+            ros-noetic-tf
+
+      - name: Build (catkin_make)
+        shell: bash
+        run: |
+          source /opt/ros/noetic/setup.bash
+          mkdir -p /ws/src
+          ln -s "$GITHUB_WORKSPACE" /ws/src/FAST_LIO_Hesai
+          cd /ws
+          catkin_make -DCMAKE_BUILD_TYPE=Release

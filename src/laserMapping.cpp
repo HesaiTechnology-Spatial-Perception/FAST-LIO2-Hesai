@@ -43,7 +43,6 @@
 #include <fstream>
 #include <csignal>
 #include <unistd.h>
-#include <Python.h>
 #include <so3_math.h>
 #include <ros/ros.h>
 #include <Eigen/Core>
@@ -74,7 +73,8 @@
 
 /*** Time Log Variables ***/
 double kdtree_incremental_time = 0.0, kdtree_search_time = 0.0, kdtree_delete_time = 0.0;
-double T1[MAXN], s_plot[MAXN], s_plot2[MAXN], s_plot3[MAXN], s_plot4[MAXN], s_plot5[MAXN], s_plot6[MAXN], s_plot7[MAXN], s_plot8[MAXN], s_plot9[MAXN], s_plot10[MAXN], s_plot11[MAXN];
+// Allocated in main() only when runtime_pos_log_enable is set (12 x MAXN doubles ~ 66 MB)
+vector<double> T1, s_plot, s_plot2, s_plot3, s_plot4, s_plot5, s_plot6, s_plot7, s_plot8, s_plot9, s_plot10, s_plot11;
 double match_time = 0, solve_time = 0, solve_const_H_time = 0;
 int    kdtree_size_st = 0, kdtree_size_end = 0, add_point_size = 0, kdtree_delete_counter = 0;
 bool   runtime_pos_log = false, pcd_save_en = false, time_sync_en = false, extrinsic_est_en = true, path_en = true;
@@ -865,6 +865,12 @@ int main(int argc, char** argv)
     nh.param<string>("common/imu_gyr_unit", imu_gyr_unit_str, "rad");
     imu_gyr_is_deg = (imu_gyr_unit_str == "deg");
     nh.param<bool>("runtime_pos_log_enable", runtime_pos_log, 0);
+    if (runtime_pos_log)
+    {
+        T1.resize(MAXN); s_plot.resize(MAXN); s_plot2.resize(MAXN); s_plot3.resize(MAXN);
+        s_plot4.resize(MAXN); s_plot5.resize(MAXN); s_plot6.resize(MAXN); s_plot7.resize(MAXN);
+        s_plot8.resize(MAXN); s_plot9.resize(MAXN); s_plot10.resize(MAXN); s_plot11.resize(MAXN);
+    }
     nh.param<bool>("mapping/extrinsic_est_en", extrinsic_est_en, true);
     nh.param<bool>("pcd_save/pcd_save_en", pcd_save_en, false);
     nh.param<int>("pcd_save/interval", pcd_save_interval, -1);
@@ -990,7 +996,10 @@ int main(int argc, char** argv)
 
             if (feats_undistort->empty() || (feats_undistort == NULL))
             {
-                ROS_WARN("No point, skip this scan!\n");
+                if (!flg_EKF_inited)
+                    ROS_INFO("Scan skipped while IMU initializes (expected at startup).");
+                else
+                    ROS_WARN("No point, skip this scan!");
                 continue;
             }
 
