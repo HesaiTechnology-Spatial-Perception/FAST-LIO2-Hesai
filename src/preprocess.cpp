@@ -4,13 +4,13 @@
 // This file is part of FAST_LIO_Hesai, a fork of FAST_LIO
 // (https://github.com/hku-mars/FAST_LIO) by the MARS Lab, HKU.
 // The upstream preprocess code has been substantially rewritten for
-// Hesai JT16 / JT128 LiDARs.  Original upstream structure is retained
+// Hesai JT16 / JT32 / JT128 LiDARs.  Original upstream structure is retained
 // where applicable; original copyright notices are preserved in the
 // accompanying LICENSE file.
 //
 // Modified by Hesai Technology, 2026-06:
 //   - Retained only Hesai JT handler; removed all non-Hesai LiDAR paths
-//   - Added hesai_handler() for JT16 / JT128 PointCloud2 parsing
+//   - Added hesai_handler() for JT16 / JT32 / JT128 PointCloud2 parsing
 //   - Added per-point ring + timestamp extraction and frame accumulation
 
 #include "preprocess.h"
@@ -83,6 +83,9 @@ void Preprocess::process(const sensor_msgs::msg::PointCloud2::UniquePtr &msg, Po
       hesai_handler(msg);
       break;
     case JT128:
+      hesai_handler(msg);
+      break;
+    case JT32:
       hesai_handler(msg);
       break;
 
@@ -188,10 +191,11 @@ void Preprocess::give_feature(pcl::PointCloud<PointType> &pl, vector<orgtype> &t
   }
   uint head = 0;
 
-  while (types[head].range < blind)
+  while (head < (uint)plsize && types[head].range < blind)
   {
     head++;
   }
+  if (head >= (uint)plsize) return; // whole scan inside the blind zone
 
   // Surf
   plsize2 = (plsize > group_size) ? (plsize - group_size) : 0;

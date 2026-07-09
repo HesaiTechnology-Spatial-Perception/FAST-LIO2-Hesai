@@ -36,12 +36,17 @@ def generate_launch_description():
         'rviz_cfg', default_value=default_rviz_config_path,
         description='RViz config file path'
     )
+    declare_config_file_cmd = DeclareLaunchArgument(
+        'config_file',
+        default_value=os.path.join(default_config_path, 'jt16.yaml'),
+        description='FAST-LIO parameter file'
+    )
 
     fast_lio_node = Node(
         package='fast_lio',
         executable='fastlio_mapping',
         parameters=[
-            os.path.join(default_config_path, 'jt16.yaml'),
+            LaunchConfiguration('config_file'),
             {'use_sim_time': use_sim_time}
         ],
         output='screen'
@@ -57,6 +62,7 @@ def generate_launch_description():
     ld.add_action(declare_use_sim_time_cmd)
     ld.add_action(declare_rviz_cmd)
     ld.add_action(declare_rviz_config_path_cmd)
+    ld.add_action(declare_config_file_cmd)
 
     ld.add_action(fast_lio_node)
     ld.add_action(rviz_node)

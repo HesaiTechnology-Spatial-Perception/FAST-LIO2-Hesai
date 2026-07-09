@@ -10,7 +10,7 @@
 // All rights reserved.
 //
 // Modified by Hesai Technology, 2026-06.
-// Modifications: adapted for Hesai JT16 / JT128 LiDARs; ported to ROS 2
+// Modifications: adapted for Hesai JT16 / JT32 / JT128 LiDARs; ported to ROS 2
 // (rclcpp); added /map_save service and pcd_save support; added
 // imu_gyr_unit (deg/rad) parameter; re-enabled exit-time PCD save
 // (the buffer accumulation block was commented out upstream, so
@@ -47,7 +47,6 @@
 #include <csignal>
 #include <chrono>
 #include <unistd.h>
-#include <Python.h>
 #include <so3_math.h>
 #include <rclcpp/rclcpp.hpp>
 #include <Eigen/Core>
@@ -76,10 +75,14 @@
 
 /*** Time Log Variables ***/
 double kdtree_incremental_time = 0.0, kdtree_search_time = 0.0, kdtree_delete_time = 0.0;
-double T1[MAXN], s_plot[MAXN], s_plot2[MAXN], s_plot3[MAXN], s_plot4[MAXN], s_plot5[MAXN], s_plot6[MAXN], s_plot7[MAXN], s_plot8[MAXN], s_plot9[MAXN], s_plot10[MAXN], s_plot11[MAXN];
+// Allocated only when runtime_pos_log_enable is set (12 x MAXN doubles ~ 66 MB)
+vector<double> T1, s_plot, s_plot2, s_plot3, s_plot4, s_plot5, s_plot6, s_plot7, s_plot8, s_plot9, s_plot10, s_plot11;
 double match_time = 0, solve_time = 0, solve_const_H_time = 0;
 int    kdtree_size_st = 0, kdtree_size_end = 0, add_point_size = 0, kdtree_delete_counter = 0;
 bool   runtime_pos_log = false, pcd_save_en = false, time_sync_en = false, extrinsic_est_en = true, path_en = true;
+double pcd_save_leaf_size = 0.0;   // >0: periodically voxel-downsample the save buffer
+bool   tum_save_en = false;        // export trajectory in TUM format to Log/traj_tum.txt
+ofstream fout_tum;
 /**************************/
 
 float res_last[100000] = {0.0};
@@ -305,6 +308,16 @@ void standard_pcl_cbk(const sensor_msgs::msg::PointCloud2::UniquePtr msg)
 
     PointCloudXYZI::Ptr  ptr(new PointCloudXYZI());
     p_pre->process(msg, ptr);
+    static bool scan_span_checked = false;
+    if (!scan_span_checked && ptr->points.size() > 100)
+    {
+        scan_span_checked = true;
+        const double span_ms = ptr->points.back().curvature;
+        if (span_ms <= 0.01 || span_ms > 1000.0)
+            std::cerr << "[WARN] per-scan time span " << span_ms
+                      << " ms is implausible; check preprocess.timestamp_unit "
+                      << "(and that the driver outputs per-point timestamps)" << std::endl;
+    }
     lidar_buffer.push_back(ptr);
     time_buffer.push_back(cur_time);
     last_timestamp_lidar = cur_time;
@@ -342,7 +355,7 @@ void imu_cbk(const sensor_msgs::msg::Imu::UniquePtr msg_in)
 
     if (timestamp < last_timestamp_imu)
     {
-        std::cerr << "lidar loop back, clear buffer" << std::endl;
+        std::cerr << "imu loop back, clear buffer" << std::endl;
         imu_buffer.clear();
     }
 
@@ -501,6 +514,18 @@ void publish_frame_world(rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::Share
         }
         *pcl_wait_save += *laserCloudWorld;
 
+        static int compact_wait_num = 0;
+        if (pcd_save_leaf_size > 0 && ++compact_wait_num >= 100)
+        {
+            compact_wait_num = 0;
+            pcl::VoxelGrid<PointType> save_filter;
+            save_filter.setLeafSize(pcd_save_leaf_size, pcd_save_leaf_size, pcd_save_leaf_size);
+            save_filter.setInputCloud(pcl_wait_save);
+            PointCloudXYZI::Ptr compacted(new PointCloudXYZI());
+            save_filter.filter(*compacted);
+            pcl_wait_save = compacted;
+        }
+
         static int scan_wait_num = 0;
         scan_wait_num ++;
         if (pcl_wait_save->size() > 0 && pcd_save_interval > 0  && scan_wait_num >= pcd_save_interval)
@@ -599,6 +624,16 @@ bool save_to_pcd(std::string & out_path)
         out_path = std::string(ROOT_DIR) + "PCD/scans.pcd";
     }
 
+    if (pcd_save_leaf_size > 0)
+    {
+        pcl::VoxelGrid<PointType> save_filter;
+        save_filter.setLeafSize(pcd_save_leaf_size, pcd_save_leaf_size, pcd_save_leaf_size);
+        save_filter.setInputCloud(pcl_wait_save);
+        PointCloudXYZI::Ptr compacted(new PointCloudXYZI());
+        save_filter.filter(*compacted);
+        pcl_wait_save = compacted;
+    }
+
     pcl::PCDWriter pcd_writer;
     int ret = pcd_writer.writeBinary(out_path, *pcl_wait_save);
     return ret == 0;
@@ -624,6 +659,12 @@ void publish_odometry(const rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPt
     odomAftMapped.header.stamp = get_ros_time(lidar_end_time);
     set_posestamp(odomAftMapped.pose);
     pubOdomAftMapped->publish(odomAftMapped);
+    if (tum_save_en && fout_tum)
+    {
+        fout_tum << std::fixed << std::setprecision(9) << lidar_end_time << " "
+                 << state_point.pos(0) << " " << state_point.pos(1) << " " << state_point.pos(2) << " "
+                 << geoQuat.x << " " << geoQuat.y << " " << geoQuat.z << " " << geoQuat.w << "\n";
+    }
     auto P = kf.get_P();
     for (int i = 0; i < 6; i ++)
     {
@@ -824,6 +865,8 @@ public:
         this->declare_parameter<bool>("mapping.extrinsic_est_en", true);
         this->declare_parameter<bool>("pcd_save.pcd_save_en", false);
         this->declare_parameter<int>("pcd_save.interval", -1);
+        this->declare_parameter<double>("pcd_save.leaf_size", 0.0);
+        this->declare_parameter<bool>("trajectory_save.tum_en", false);
         this->declare_parameter<vector<double>>("mapping.extrinsic_T", vector<double>());
         this->declare_parameter<vector<double>>("mapping.extrinsic_R", vector<double>());
 
@@ -861,13 +904,41 @@ public:
         this->get_parameter_or<int>("point_filter_num", p_pre->point_filter_num, 2);
         this->get_parameter_or<bool>("feature_extract_enable", p_pre->feature_enabled, false);
         this->get_parameter_or<bool>("runtime_pos_log_enable", runtime_pos_log, 0);
+        if (runtime_pos_log)
+        {
+            T1.resize(MAXN); s_plot.resize(MAXN); s_plot2.resize(MAXN); s_plot3.resize(MAXN);
+            s_plot4.resize(MAXN); s_plot5.resize(MAXN); s_plot6.resize(MAXN); s_plot7.resize(MAXN);
+            s_plot8.resize(MAXN); s_plot9.resize(MAXN); s_plot10.resize(MAXN); s_plot11.resize(MAXN);
+        }
         this->get_parameter_or<bool>("mapping.extrinsic_est_en", extrinsic_est_en, true);
         this->get_parameter_or<bool>("pcd_save.pcd_save_en", pcd_save_en, false);
         this->get_parameter_or<int>("pcd_save.interval", pcd_save_interval, -1);
+        this->get_parameter_or<double>("pcd_save.leaf_size", pcd_save_leaf_size, 0.0);
+        this->get_parameter_or<bool>("trajectory_save.tum_en", tum_save_en, false);
+        if (tum_save_en)
+        {
+            fout_tum.open(DEBUG_FILE_DIR("traj_tum.txt"), ios::out);
+            if (!fout_tum)
+                RCLCPP_WARN(this->get_logger(), "cannot open %s for TUM trajectory export", DEBUG_FILE_DIR("traj_tum.txt").c_str());
+        }
         this->get_parameter_or<vector<double>>("mapping.extrinsic_T", extrinT, vector<double>());
         this->get_parameter_or<vector<double>>("mapping.extrinsic_R", extrinR, vector<double>());
 
         RCLCPP_INFO(this->get_logger(), "p_pre->lidar_type %d", p_pre->lidar_type);
+        if (time_sync_en)
+        {
+            RCLCPP_WARN(this->get_logger(), "common.time_sync_en has no effect in this build; "
+                        "use common.time_offset_lidar_to_imu to compensate a fixed lidar-IMU time offset.");
+        }
+        RCLCPP_INFO(this->get_logger(),
+            "config summary: lid_topic=%s imu_topic=%s lidar_type=%d scan_line=%d "
+            "timestamp_unit=%d blind=%.2f det_range=%.1f imu_gyr_unit=%s "
+            "time_offset_lidar_to_imu=%.4f extrinsic_est_en=%d | "
+            "pcd_save_en=%d interval=%d leaf_size=%.2f map_file_path='%s' tum_en=%d",
+            lid_topic.c_str(), imu_topic.c_str(), p_pre->lidar_type, p_pre->N_SCANS,
+            p_pre->time_unit, p_pre->blind, DET_RANGE, imu_gyr_is_deg ? "deg" : "rad",
+            time_diff_lidar_to_imu, (int)extrinsic_est_en,
+            (int)pcd_save_en, pcd_save_interval, pcd_save_leaf_size, map_file_path.c_str(), (int)tum_save_en);
 
         path.header.stamp = this->get_clock()->now();
         path.header.frame_id ="camera_init";
@@ -900,23 +971,24 @@ public:
         fill(epsi, epsi+23, 0.001);
         kf.init_dyn_share(get_f, df_dx, df_dw, h_share_model, NUM_MAX_ITERATIONS, epsi);
 
-        /*** debug record ***/
-        // FILE *fp;
-        string pos_log_dir = root_dir + "/Log/pos_log.txt";
-        fp = fopen(pos_log_dir.c_str(),"w");
+        /*** debug record (only when runtime_pos_log_enable) ***/
+        if (runtime_pos_log)
+        {
+            string pos_log_dir = root_dir + "/Log/pos_log.txt";
+            fp = fopen(pos_log_dir.c_str(),"w");
 
-        // ofstream fout_pre, fout_out, fout_dbg;
-        fout_pre.open(DEBUG_FILE_DIR("mat_pre.txt"),ios::out);
-        fout_out.open(DEBUG_FILE_DIR("mat_out.txt"),ios::out);
-        fout_dbg.open(DEBUG_FILE_DIR("dbg.txt"),ios::out);
-        if (fout_pre && fout_out)
-            cout << "~~~~"<<ROOT_DIR<<" file opened" << endl;
-        else
-            cout << "~~~~"<<ROOT_DIR<<" doesn't exist" << endl;
+            fout_pre.open(DEBUG_FILE_DIR("mat_pre.txt"),ios::out);
+            fout_out.open(DEBUG_FILE_DIR("mat_out.txt"),ios::out);
+            fout_dbg.open(DEBUG_FILE_DIR("dbg.txt"),ios::out);
+            if (fout_pre && fout_out)
+                cout << "~~~~"<<ROOT_DIR<<" file opened" << endl;
+            else
+                cout << "~~~~"<<ROOT_DIR<<" doesn't exist" << endl;
+        }
 
         /*** ROS subscribe initialization ***/
         sub_pcl_pc_ = this->create_subscription<sensor_msgs::msg::PointCloud2>(lid_topic, rclcpp::SensorDataQoS(), standard_pcl_cbk);
-        sub_imu_ = this->create_subscription<sensor_msgs::msg::Imu>(imu_topic, 10, imu_cbk);
+        sub_imu_ = this->create_subscription<sensor_msgs::msg::Imu>(imu_topic, rclcpp::SensorDataQoS(), imu_cbk);
         pubLaserCloudFull_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("/cloud_registered", 20);
         pubLaserCloudFull_body_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("/cloud_registered_body", 20);
         pubLaserCloudEffect_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("/cloud_effected", 20);
@@ -941,7 +1013,7 @@ public:
     {
         fout_out.close();
         fout_pre.close();
-        fclose(fp);
+        if (fp) fclose(fp);
     }
 
 private:
@@ -972,7 +1044,10 @@ private:
 
             if (feats_undistort->empty() || (feats_undistort == NULL))
             {
-                RCLCPP_WARN(this->get_logger(), "No point, skip this scan!\n");
+                if (!flg_EKF_inited)
+                    RCLCPP_INFO(this->get_logger(), "Scan skipped while IMU initializes (expected at startup).");
+                else
+                    RCLCPP_WARN(this->get_logger(), "No point, skip this scan!");
                 return;
             }
 
@@ -1017,9 +1092,12 @@ private:
             normvec->resize(feats_down_size);
             feats_down_world->resize(feats_down_size);
 
-            V3D ext_euler = SO3ToEuler(state_point.offset_R_L_I);
-            fout_pre<<setw(20)<<Measures.lidar_beg_time - first_lidar_time<<" "<<euler_cur.transpose()<<" "<< state_point.pos.transpose()<<" "<<ext_euler.transpose() << " "<<state_point.offset_T_L_I.transpose()<< " " << state_point.vel.transpose() \
-            <<" "<<state_point.bg.transpose()<<" "<<state_point.ba.transpose()<<" "<<state_point.grav<< endl;
+            if (runtime_pos_log)
+            {
+                V3D ext_euler_pre = SO3ToEuler(state_point.offset_R_L_I);
+                fout_pre<<setw(20)<<Measures.lidar_beg_time - first_lidar_time<<" "<<euler_cur.transpose()<<" "<< state_point.pos.transpose()<<" "<<ext_euler_pre.transpose() << " "<<state_point.offset_T_L_I.transpose()<< " " << state_point.vel.transpose() \
+                <<" "<<state_point.bg.transpose()<<" "<<state_point.ba.transpose()<<" "<<state_point.grav<< endl;
+            }
 
             if(0) // If you need to see map point, change to "if(1)"
             {
@@ -1092,7 +1170,7 @@ private:
                     time_log_counter ++;
                 }
                 printf("[ mapping ]: time: IMU + Map + Input Downsample: %0.6f ave match: %0.6f ave solve: %0.6f  ave ICP: %0.6f  map incre: %0.6f ave total: %0.6f icp: %0.6f construct H: %0.6f \n",t1-t0,aver_time_match,aver_time_solve,t3-t1,t5-t3,aver_time_consu,aver_time_icp, aver_time_const_H_time);
-                ext_euler = SO3ToEuler(state_point.offset_R_L_I);
+                V3D ext_euler = SO3ToEuler(state_point.offset_R_L_I);
                 fout_out << setw(20) << Measures.lidar_beg_time - first_lidar_time << " " << euler_cur.transpose() << " " << state_point.pos.transpose()<< " " << ext_euler.transpose() << " "<<state_point.offset_T_L_I.transpose()<<" "<< state_point.vel.transpose() \
                 <<" "<<state_point.bg.transpose()<<" "<<state_point.ba.transpose()<<" "<<state_point.grav<<" "<<feats_undistort->points.size()<<endl;
                 dump_lio_state_to_log(fp);
@@ -1126,11 +1204,10 @@ private:
         }
 
         std::string saved_path;
-        const size_t pt_count = pcl_wait_save->size();
         if (save_to_pcd(saved_path))
         {
             res->success = true;
-            res->message = "Saved " + std::to_string(pt_count) + " points to " + saved_path;
+            res->message = "Saved " + std::to_string(pcl_wait_save->size()) + " points to " + saved_path;
             RCLCPP_INFO(this->get_logger(), "[map_save] %s", res->message.c_str());
         }
         else
@@ -1162,7 +1239,7 @@ private:
     bool flg_EKF_converged, EKF_stop_flg = 0;
     double epsi[23] = {0.001};
 
-    FILE *fp;
+    FILE *fp = NULL;
     ofstream fout_pre, fout_out, fout_dbg;
 };
 

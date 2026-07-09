@@ -1,0 +1,35 @@
+name: build
+
+on:
+  push:
+    branches: [ROS2, "dev/**"]
+  pull_request:
+    branches: [ROS2]
+
+jobs:
+  ros2-humble:
+    runs-on: ubuntu-latest
+    container: ros:humble-ros-base
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            build-essential \
+            libeigen3-dev \
+            libpcl-dev \
+            ros-humble-pcl-ros \
+            ros-humble-pcl-conversions
+
+      - name: Build (colcon)
+        shell: bash
+        run: |
+          source /opt/ros/humble/setup.bash
+          mkdir -p /ws/src
+          ln -s "$GITHUB_WORKSPACE" /ws/src/FAST_LIO_Hesai
+          cd /ws
+          colcon build --event-handlers console_direct+

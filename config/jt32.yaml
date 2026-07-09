@@ -1,6 +1,6 @@
 # Copyright 2026 Hesai Technology. All rights reserved.
 # SPDX-License-Identifier: GPL-2.0
-# Configuration for Hesai JT16 LiDAR with FAST-LIO2 (ROS 2).
+# Configuration for Hesai JT32 LiDAR with FAST-LIO2 (ROS 2).
 /**:
     ros__parameters:
         feature_extract_enable: false
@@ -10,28 +10,27 @@
         filter_size_map: 0.5
         cube_side_length: 1000.0
         runtime_pos_log_enable: false
-        map_file_path: "PCD/fast_lio2_lidar_only_map.pcd"
 
         common:
             lid_topic:  "/lidar_points"
             imu_topic:  "/lidar_imu"
             time_sync_en: false
             time_offset_lidar_to_imu: 0.0
-            imu_gyr_unit: "deg"          # "rad" or "deg"
+            imu_gyr_unit: "rad"          # Hesai ROS Driver 2.0 publishes rad/s
 
         preprocess:
-            lidar_type: 1                # 1: Hesai JT16
-            scan_line: 16
+            lidar_type: 3                # 3: Hesai JT32
+            scan_line: 32
             timestamp_unit: 0            # 0-second, 1-millisecond, 2-microsecond, 3-nanosecond
-            blind: 1.0
+            blind: 0.15
 
         mapping:
             acc_cov: 0.1
             gyr_cov: 0.1
             b_acc_cov: 0.0001
             b_gyr_cov: 0.0001
-            fov_degree: 90.0
-            det_range: 40.0
+            fov_degree: 360.0
+            det_range: 45.0
             extrinsic_est_en: true
             extrinsic_T: [0.0, 0.0, 0.0]
             extrinsic_R: [1.0, 0.0, 0.0,
@@ -40,16 +39,14 @@
 
         publish:
             path_en: true
-            map_en: true
-            effect_map_en: true
             scan_publish_en: true
             dense_publish_en: true
             scan_bodyframe_pub_en: true
 
         pcd_save:
-            pcd_save_en: true
+            pcd_save_en: false
             interval: -1
-            leaf_size: 0.0           # >0: voxel-downsample the saved map (m); bounds memory on long runs
+            leaf_size: 0.0
 
         trajectory_save:
-            tum_en: false            # true: export trajectory to Log/traj_tum.txt (TUM format)
+            tum_en: false

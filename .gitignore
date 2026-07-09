@@ -8,5 +8,10 @@ Log/*.pdf
 .vscode/c_cpp_properties.json
 .vscode/settings.json
 PCD/*.pcd
+slam_raw_maps/
+*.log
+AGENTS.md
+.agents/
+.codex/
 tools/__pycache__/check_config.cpython-310.pyc
 tools/__pycache__/check_input.cpython-310.pyc

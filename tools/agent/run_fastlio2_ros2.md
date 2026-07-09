@@ -1,7 +1,7 @@
 ---
 name: run-fastlio2-hesai-ros2
 description: >-
-  Set up and run FAST-LIO2 on Hesai JT16 / JT128 LiDARs on ROS 2 Humble
+  Set up and run FAST-LIO2 on Hesai JT16 / JT32 / JT128 LiDARs on ROS 2 Humble
   (FAST_LIO_Hesai ROS2 branch). Detects and configures the local ROS 2
   environment, then runs FAST-LIO2 from a PCAP capture, an existing rosbag, or
   a live sensor. Use when building, configuring, validating, or running
@@ -29,7 +29,7 @@ Package name: `fast_lio`. Run commands from the ROS 2 workspace root.
 
 **Do not ask the user for the model — detect it automatically from the data.**
 The model is determined by the point cloud `ring` field: max ring ≤ 15 → JT16,
-otherwise → JT128.
+max ring ≤ 31 → JT32, otherwise → JT128.
 
 With the sensor publishing or a rosbag2 playing (see Step 3), run:
 
@@ -38,12 +38,17 @@ ros2 run fast_lio check_input.py        # --model defaults to "auto"
 ```
 
 It prints e.g. `auto-detected model: JT16 (ring max=15)`. Record the detected
-model as `MODEL` (`jt16` or `jt128`) and substitute it in every command below.
+model as `MODEL` (`jt16`, `jt32`, or `jt128`) and substitute it in every command below.
 
 | Model | Lines | Config | Launch file | `lidar_type` (ROS 2) |
 | --- | --- | --- | --- | --- |
 | JT16 | 16 | `config/jt16.yaml` | `mapping_jt16.launch.py` | 1 |
+| JT32 | 32 | `config/jt32.yaml` | `mapping_jt32.launch.py` | 3 |
 | JT128 | 128 | `config/jt128.yaml` | `mapping_jt128.launch.py` | 2 |
+
+> JT32 support is pre-adapted in FAST-LIO2, but the current public Hesai ROS
+> Driver does not parse JT32 UDP 1.12. JT32 currently requires the validated
+> internal compatible driver.
 
 > If no data is flowing yet, first bring up the source (Step 3 Path C for a live
 > sensor, or play a bag), then run the detection above.
@@ -90,7 +95,7 @@ ros2 pkg prefix fast_lio
 ### Path A: PCAP → rosbag2
 
 ```bash
-# Replace $MODEL with jt16 or jt128
+# Replace $MODEL with jt16, jt32, or jt128
 bash tools/pcap_to_rosbag/pcap_to_rosbag_ros2.sh \
   --model      $MODEL \
   --pcap       /path/to/input.pcap \
@@ -144,18 +149,20 @@ subscribe to `/cloud_registered` and `/path`.
 
 Default behavior by model:
 - **JT16**: `map_en`, `effect_map_en`, `pcd_save_en` all `true` by default (few points, lightweight).
+- **JT32**: all three `false` by default. Enable in yaml when needed.
 - **JT128**: all three `false` by default (many points, reduces load). Enable in yaml when needed.
 
 ## Step 6: Save the PCD map (optional)
 
 To persist the map as a `.pcd` file, enable saving in `config/$MODEL.yaml`
-(JT16 has it on by default; JT128 is off):
+(JT16 has it on by default; JT32 and JT128 are off):
 
 ```yaml
 map_file_path: "PCD/fast_lio2_jt_map.pcd"   # optional; default PCD/scans.pcd
 pcd_save:
   pcd_save_en: true
   interval: -1     # -1 = save once on exit; >0 = save every N frames
+  leaf_size: 0.0   # >0 = voxel-downsample the saved map (meters)
 ```
 
 Two ways to trigger the save:
@@ -177,7 +184,7 @@ After mapping, assess the result and get problem-specific suggestions:
 # Offline (recommended): analyze the saved PCD
 python3 tools/check_map.py --pcd PCD/fast_lio2_jt_map.pcd
 
-# Live: requires publish.map_en (JT16 default true; JT128 enable it)
+# Live: requires publish.map_en (JT16 default true; JT32/JT128 enable it)
 ros2 run fast_lio check_map.py --map-topic /Laser_map --odom-topic /Odometry
 ```
 

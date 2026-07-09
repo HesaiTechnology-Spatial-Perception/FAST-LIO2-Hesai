@@ -1,16 +1,14 @@
 # Copyright 2026 Hesai Technology. All rights reserved.
 # SPDX-License-Identifier: GPL-2.0
-# Launch file for FAST-LIO2 with Hesai JT128 LiDAR (ROS 2).
+# Launch file for FAST-LIO2 with Hesai JT32 LiDAR (ROS 2).
 
 import os.path
 
 from ament_index_python.packages import get_package_share_directory
-
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
-from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch.conditions import IfCondition
-
+from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 
@@ -38,7 +36,7 @@ def generate_launch_description():
     )
     declare_config_file_cmd = DeclareLaunchArgument(
         'config_file',
-        default_value=os.path.join(default_config_path, 'jt128.yaml'),
+        default_value=os.path.join(default_config_path, 'jt32.yaml'),
         description='FAST-LIO parameter file'
     )
 
@@ -63,8 +61,6 @@ def generate_launch_description():
     ld.add_action(declare_rviz_cmd)
     ld.add_action(declare_rviz_config_path_cmd)
     ld.add_action(declare_config_file_cmd)
-
     ld.add_action(fast_lio_node)
     ld.add_action(rviz_node)
-
     return ld

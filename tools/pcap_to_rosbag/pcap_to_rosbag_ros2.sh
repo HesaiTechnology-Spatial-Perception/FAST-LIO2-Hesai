@@ -17,7 +17,8 @@
 #     --model      jt128 \
 #     --pcap       /data/input.pcap \
 #     --correction /data/correction.csv \
-#     --firetime   /data/firetime.csv \
+#     [--firetime  /data/firetime.csv] \
+#     [--timestamp-offset -2208988800] \
 #     --output     /data/output \
 #     --driver-ws  ~/hesai_ros2_ws
 #
@@ -49,6 +50,7 @@ IMU_TOPIC="/lidar_imu"
 TOPIC_WAIT_TIMEOUT=30
 SILENCE_TIMEOUT=4
 PLAY_RATE=1.0
+TIMESTAMP_OFFSET=0.0
 
 # ── argument parsing ──────────────────────────────────────────────────────────
 usage() {
@@ -65,6 +67,7 @@ while [[ $# -gt 0 ]]; do
         --output)      OUTPUT="$2";      shift 2 ;;
         --driver-ws)   DRIVER_WS="$2";   shift 2 ;;
         --play-rate)   PLAY_RATE="$2";   shift 2 ;;
+        --timestamp-offset) TIMESTAMP_OFFSET="$2"; shift 2 ;;
         --lidar-topic) LIDAR_TOPIC="$2"; shift 2 ;;
         --imu-topic)   IMU_TOPIC="$2";   shift 2 ;;
         -h|--help)     usage ;;
@@ -73,17 +76,16 @@ while [[ $# -gt 0 ]]; do
 done
 
 # ── validation ────────────────────────────────────────────────────────────────
-[[ -n "$MODEL" ]]      || die "--model is required (jt16 or jt128)"
+[[ -n "$MODEL" ]]      || die "--model is required (jt16, jt32, or jt128)"
 [[ -n "$PCAP" ]]       || die "--pcap is required"
 [[ -n "$CORRECTION" ]] || die "--correction is required"
-[[ -n "$FIRETIME" ]]   || die "--firetime is required"
 [[ -n "$OUTPUT" ]]     || die "--output is required"
 [[ -n "$DRIVER_WS" ]]  || die "--driver-ws is required"
 
-[[ "$MODEL" == "jt16" || "$MODEL" == "jt128" ]] || die "--model must be jt16 or jt128"
+[[ "$MODEL" == "jt16" || "$MODEL" == "jt32" || "$MODEL" == "jt128" ]] || die "--model must be jt16, jt32, or jt128"
 [[ -f "$PCAP" ]]       || die "PCAP file not found: $PCAP"
 [[ -f "$CORRECTION" ]] || die "Correction file not found: $CORRECTION"
-[[ -f "$FIRETIME" ]]   || die "Firetime file not found: $FIRETIME"
+[[ -z "$FIRETIME" || -f "$FIRETIME" ]] || die "Firetime file not found: $FIRETIME"
 [[ -d "$DRIVER_WS" ]]  || die "Driver workspace not found: $DRIVER_WS"
 
 command -v ros2       >/dev/null 2>&1 || die "ros2 not found. Source your ROS 2 workspace."
@@ -135,11 +137,18 @@ if not cfg or "lidar" not in cfg or not cfg["lidar"]:
 
 drv = cfg["lidar"][0]["driver"]
 drv["source_type"] = 2
-drv.pop("lidar_udp_type", None)
+# Keep flat fields for older driver releases and pcap_type for newer releases.
+drv["pcap_path"] = "$PCAP"
+drv["correction_file_path"] = "$CORRECTION"
+drv["firetimes_path"] = "$FIRETIME"
+drv["pcap_play_synchronization"] = True
+drv["pcap_play_in_loop"] = False
+drv["play_rate_"] = $PLAY_RATE
+drv["ros_timestamp_offset"] = $TIMESTAMP_OFFSET
 drv["pcap_type"] = {
     "pcap_path":             "$PCAP",
     "correction_file_path":  "$CORRECTION",
-    "firetime_file_path":    "$FIRETIME",
+    "firetimes_path":        "$FIRETIME",
     "pcap_play_synchronization": True,
     "pcap_play_in_loop":    False,
     "play_rate_":            $PLAY_RATE,
@@ -158,17 +167,26 @@ ok "Config generated."
 
 # ── source driver workspace and back up config ────────────────────────────────
 # shellcheck disable=SC1090
+set +u
 source "$DRIVER_WS/install/setup.bash"
+set -u
 
 cp "$DRIVER_CONFIG" "$CONFIG_BACKUP"
 cp "$TMP_CONFIG"    "$DRIVER_CONFIG"
 info "Backed up original config → $CONFIG_BACKUP"
 
+# ── start rosbag2 recorder before playback ───────────────────────────────────
+OUTPUT_PARENT=$(dirname "$OUTPUT")
+[[ -d "$OUTPUT_PARENT" ]] || mkdir -p "$OUTPUT_PARENT"
+info "Recording rosbag2 → $OUTPUT"
+ros2 bag record -o "$OUTPUT" "$LIDAR_TOPIC" "$IMU_TOPIC" &
+BAG_PID=$!
+sleep 1
+
 # ── start driver ──────────────────────────────────────────────────────────────
 info "Starting Hesai ROS 2 Driver in PCAP mode..."
-ros2 launch hesai_ros_driver start.launch.py &
+ros2 run hesai_ros_driver hesai_ros_driver_node &
 DRIVER_PID=$!
-sleep 3   # allow driver to initialize
 
 # ── wait for topics ───────────────────────────────────────────────────────────
 info "Waiting for topics (timeout: ${TOPIC_WAIT_TIMEOUT}s)..."
@@ -186,19 +204,12 @@ ok "Topics found: $LIDAR_TOPIC  $IMU_TOPIC"
 
 # ── quick field check ─────────────────────────────────────────────────────────
 info "Checking required point cloud fields..."
-FIELDS=$(timeout 5 ros2 topic echo "$LIDAR_TOPIC" --once 2>/dev/null | grep "name:" | awk '{print $2}' | tr '\n' ' ' || true)
+FIELDS=$(timeout 5 ros2 topic echo "$LIDAR_TOPIC" --once 2>/dev/null \
+    | sed -n 's/.*name:[[:space:]]*//p' | tr '\n' ' ' || true)
 for f in ring timestamp; do
     echo "$FIELDS" | grep -q "$f" || warn "Field '$f' not detected. FAST-LIO2 may fail."
 done
 ok "Fields: $FIELDS"
-
-# ── start ros2 bag record ─────────────────────────────────────────────────────
-OUTPUT_PARENT=$(dirname "$OUTPUT")
-[[ -d "$OUTPUT_PARENT" ]] || mkdir -p "$OUTPUT_PARENT"
-info "Recording rosbag2 → $OUTPUT"
-ros2 bag record -o "$OUTPUT" "$LIDAR_TOPIC" "$IMU_TOPIC" &
-BAG_PID=$!
-sleep 1
 
 # ── wait for PCAP to finish ───────────────────────────────────────────────────
 info "Recording... (waiting for PCAP playback to finish)"
@@ -207,7 +218,7 @@ while true; do
     if timeout "$SILENCE_TIMEOUT" ros2 topic echo "$LIDAR_TOPIC" --once > /dev/null 2>&1; then
         silence=0
     else
-        (( silence++ ))
+        (( silence += 1 ))
         info "No data for ${silence}×${SILENCE_TIMEOUT}s..."
         [[ $silence -ge 2 ]] && break
     fi
@@ -227,6 +238,8 @@ info "Validating output..."
 BAG_INFO=$(ros2 bag info "$OUTPUT" 2>/dev/null || true)
 echo "$BAG_INFO" | grep -q "$LIDAR_TOPIC" || warn "/lidar_points not found in bag."
 echo "$BAG_INFO" | grep -q "$IMU_TOPIC"   || warn "/lidar_imu not found in bag."
+echo "$BAG_INFO" | grep -A5 "Topic: $LIDAR_TOPIC" | grep -Eq 'Count: [1-9][0-9]*' || die "$LIDAR_TOPIC has no messages in bag."
+echo "$BAG_INFO" | grep -A5 "Topic: $IMU_TOPIC" | grep -Eq 'Count: [1-9][0-9]*' || die "$IMU_TOPIC has no messages in bag."
 
 DURATION=$(echo "$BAG_INFO" | grep -i "duration:" | awk '{print $2}' || echo "unknown")
 SIZE=$(du -sh "$OUTPUT" | awk '{print $1}')

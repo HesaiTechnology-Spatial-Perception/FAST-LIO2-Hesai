@@ -1,0 +1,8 @@
+.git
+PCD/*.pcd
+Log/*.txt
+Log/*.csv
+doc
+build
+install
+log

@@ -19,7 +19,7 @@ starting FAST-LIO2.
 | 4 | `timestamp` is per-point and monotonically increasing | Motion undistortion broken |
 | 4b | `timestamp_unit` inferred from data (and compared to config if given) | Wrong `timestamp_unit` → undistortion wrong |
 | 4c | Frame interval stability / dropped frame detection | Frame loss degrades mapping |
-| 5 | `ring` range matches model (JT16: 0–15, JT128: 0–127) | Wrong `scan_line` config |
+| 5 | `ring` range matches model (JT16: 0–15, JT32: 0–31, JT128: 0–127) | Wrong `scan_line` config |
 | 6 | IMU frequency ≥ 100 Hz | IMU pipeline issue |
 | 7 | Gyro magnitude sanity check (deg/s vs rad/s) | Wrong `imu_gyr_unit` config |
 | 8 | `frame_id` of both sensors | TF / coordinate frame risk |
@@ -45,7 +45,7 @@ python3 tools/check_input.py --model jt128 --timestamp-unit 0
 | ------ | ------- | ----------- |
 | `--lidar_topic` | `/lidar_points` | Point cloud topic |
 | `--imu_topic` | `/lidar_imu` | IMU topic |
-| `--model` | `jt128` | `jt16` or `jt128` |
+| `--model` | `auto` | `jt16`, `jt32`, `jt128`, or auto-detect |
 | `--timeout` | `8.0` | Seconds to wait for messages |
 | `--timestamp-unit` | (none) | Your `preprocess.timestamp_unit` (0–3); enables a mismatch check |
 
@@ -60,7 +60,7 @@ it on a config file directly to catch the most common misconfigurations.
 
 | Item | Failure means |
 |------|---------------|
-| `preprocess.lidar_type` matches model + ROS version | Wrong LiDAR enum (ROS 1: 5/6, ROS 2: 1/2) |
+| `preprocess.lidar_type` matches model + ROS version | Wrong LiDAR enum (ROS 1: 5/7/6, ROS 2: 1/3/2 for JT16/JT32/JT128) |
 | `preprocess.scan_line` matches model | Wrong line count |
 | `preprocess.timestamp_unit` is a valid enum (0–3) | Invalid unit |
 | `common.imu_gyr_unit` is `deg` or `rad` | Invalid unit |
@@ -81,7 +81,7 @@ python3 tools/check_config.py --config config/jt16.yaml  --model jt16  --ros 1
 | Option | Required | Description |
 | ------ | -------- | ----------- |
 | `--config` | ✓ | Path to the yaml config |
-| `--model` | ✓ | `jt16` or `jt128` |
+| `--model` | ✓ | `jt16`, `jt32`, or `jt128` |
 | `--ros` | ✓ | `1` or `2` (lidar_type enum differs) |
 
 ---
@@ -144,7 +144,7 @@ output.bag  (ROS 1)  or  output/  (ROS 2)
 **Prerequisites:**
 
 - PCAP file parseable by Hesai ROS Driver
-- `correction.csv` and `firetime.csv` calibration files for the LiDAR
+- A LiDAR-specific `correction.csv`; `firetime.csv` is optional when available
 - IMU data present in the PCAP (required for FAST-LIO2)
 - Python 3 with PyYAML: `pip3 install pyyaml`
 
@@ -180,10 +180,10 @@ Output: a rosbag2 directory `/data/output/`.
 
 | Option | Required | Description |
 | ------ | -------- | ----------- |
-| `--model` | ✓ | `jt16` or `jt128` |
+| `--model` | ✓ | `jt16`, `jt32`, or `jt128` |
 | `--pcap` | ✓ | Path to `.pcap` file |
 | `--correction` | ✓ | Path to correction `.csv` |
-| `--firetime` | ✓ | Path to firetime `.csv` |
+| `--firetime` | | Optional path to firetime `.csv` |
 | `--output` | ✓ | Output bag path (file for ROS 1, directory for ROS 2) |
 | `--driver-ws` | ✓ | Hesai ROS Driver workspace root |
 | `--play-rate` | | PCAP playback speed (default: `1.0`) |
@@ -209,6 +209,6 @@ Output: a rosbag2 directory `/data/output/`.
 2. IMU data must be present in the PCAP for FAST-LIO2.
 3. /lidar_points must contain 'ring' and 'timestamp' fields.
 4. timestamp_unit and imu_gyr_unit in the FAST-LIO2 config must match the PCAP data.
-5. Field names in the driver config (e.g. firetime_file_path) may vary across driver versions —
+5. Field names in the driver config (e.g. `firetimes_path`) may vary across driver versions —
    verify against your driver's actual config.yaml structure.
 ```

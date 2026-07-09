@@ -1,0 +1,54 @@
+name: Bug report
+description: Report a problem with FAST_LIO_Hesai
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before filing, please run the input checker with your sensor or rosbag active and paste its output below — it answers most environment questions in one shot:
+        `python3 tools/check_input.py --model jt16` (or `--model jt128`)
+  - type: input
+    id: version
+    attributes:
+      label: Branch and commit / release
+      description: "`git rev-parse --short HEAD` and the branch (main = ROS 1, ROS2 = ROS 2)"
+      placeholder: "ROS2 @ 757f2b0"
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, ROS distro, real machine or VM, LiDAR model
+      placeholder: "Ubuntu 22.04, Humble, VMware VM, JT16"
+    validations:
+      required: true
+  - type: textarea
+    id: checker
+    attributes:
+      label: check_input.py output
+      description: Paste the full text output (run while the driver or rosbag is publishing)
+      render: text
+  - type: textarea
+    id: topics
+    attributes:
+      label: Topic list
+      description: "`ros2 topic list` / `rostopic list` output"
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: Node log
+      description: Full terminal output of fastlio_mapping as TEXT (no screenshots, please)
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: What happened / what did you expect
+      description: Steps to reproduce, expected vs actual behavior
+    validations:
+      required: true
