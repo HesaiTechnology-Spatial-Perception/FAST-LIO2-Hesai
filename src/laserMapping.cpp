@@ -12,7 +12,9 @@
 // Modified by Hesai Technology, 2026-06.
 // Modifications: adapted for Hesai JT16 / JT128 LiDARs; ported to ROS 2
 // (rclcpp); added /map_save service and pcd_save support; added
-// imu_gyr_unit (deg/rad) parameter.
+// imu_gyr_unit (deg/rad) parameter; re-enabled exit-time PCD save
+// (the buffer accumulation block was commented out upstream, so
+// pcd_save_en never produced a file).
 //
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions are met:
@@ -486,7 +488,6 @@ void publish_frame_world(rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::Share
     /**************** save map ****************/
     /* 1. make sure you have enough memories
     /* 2. noted that pcd save will influence the real-time performences **/
-    /*
     if (pcd_save_en)
     {
         int size = feats_undistort->points.size();
@@ -513,7 +514,6 @@ void publish_frame_world(rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::Share
             scan_wait_num = 0;
         }
     }
-    */
 }
 
 void publish_frame_body(rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pubLaserCloudFull_body)
@@ -579,10 +579,29 @@ void publish_map(rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub
     // pubLaserCloudMap->publish(laserCloudMap);
 }
 
-void save_to_pcd()
+// Save the accumulated point cloud buffer to disk.
+// Resolves the output path in this priority:
+//   1. `map_file_path` from yaml (absolute path used as-is; relative path joined with ROOT_DIR)
+//   2. fallback: <ROOT_DIR>/PCD/scans.pcd
+// Returns true on a successful write of a non-empty buffer.
+bool save_to_pcd(std::string & out_path)
 {
+    if (pcl_wait_save->empty()) {
+        out_path.clear();
+        return false;
+    }
+
+    if (!map_file_path.empty()) {
+        out_path = (map_file_path.front() == '/')
+                       ? map_file_path
+                       : std::string(ROOT_DIR) + map_file_path;
+    } else {
+        out_path = std::string(ROOT_DIR) + "PCD/scans.pcd";
+    }
+
     pcl::PCDWriter pcd_writer;
-    pcd_writer.writeBinary(map_file_path, *pcl_wait_pub);
+    int ret = pcd_writer.writeBinary(out_path, *pcl_wait_save);
+    return ret == 0;
 }
 
 template<typename T>
@@ -1041,7 +1060,7 @@ private:
             
             /******* Publish points *******/
             if (path_en)                         publish_path(pubPath_);
-            if (scan_pub_en)      publish_frame_world(pubLaserCloudFull_);
+            if (scan_pub_en || pcd_save_en)      publish_frame_world(pubLaserCloudFull_);
             if (scan_pub_en && scan_body_pub_en) publish_frame_body(pubLaserCloudFull_body_);
             if (effect_pub_en) publish_effect_world(pubLaserCloudEffect_);
             // if (map_pub_en) publish_map(pubLaserCloudMap_);
@@ -1083,19 +1102,39 @@ private:
         if (map_pub_en) publish_map(pubLaserCloudMap_);
     }
 
-    void map_save_callback(std_srvs::srv::Trigger::Request::ConstSharedPtr req, std_srvs::srv::Trigger::Response::SharedPtr res)
+    // std_srvs/Trigger callback exposed at the `map_save` service.
+    // Mirrors the ROS 1 branch behaviour so external tools can flush
+    // the accumulated PCD without having to shut the node down.
+    void map_save_callback(std_srvs::srv::Trigger::Request::ConstSharedPtr /*req*/, std_srvs::srv::Trigger::Response::SharedPtr res)
     {
-        RCLCPP_INFO(this->get_logger(), "Saving map to %s...", map_file_path.c_str());
-        if (pcd_save_en)
+        if (!pcd_save_en)
         {
-            save_to_pcd();
+            res->success = false;
+            res->message = "pcd_save_en is false; enable it in yaml to use /map_save.";
+            RCLCPP_WARN(this->get_logger(), "[map_save] %s", res->message.c_str());
+            return;
+        }
+        if (pcl_wait_save->empty())
+        {
+            res->success = false;
+            res->message = "No points buffered yet; let FAST-LIO2 run for a while first.";
+            RCLCPP_WARN(this->get_logger(), "[map_save] %s", res->message.c_str());
+            return;
+        }
+
+        std::string saved_path;
+        const size_t pt_count = pcl_wait_save->size();
+        if (save_to_pcd(saved_path))
+        {
             res->success = true;
-            res->message = "Map saved.";
+            res->message = "Saved " + std::to_string(pt_count) + " points to " + saved_path;
+            RCLCPP_INFO(this->get_logger(), "[map_save] %s", res->message.c_str());
         }
         else
         {
             res->success = false;
-            res->message = "Map save disabled.";
+            res->message = "Failed to write PCD to " + saved_path;
+            RCLCPP_ERROR(this->get_logger(), "[map_save] %s", res->message.c_str());
         }
     }
 
@@ -1137,13 +1176,14 @@ int main(int argc, char** argv)
     /**************** save map ****************/
     /* 1. make sure you have enough memories
     /* 2. pcd save will largely influence the real-time performences **/
-    if (pcl_wait_save->size() > 0 && pcd_save_en)
+    if (pcd_save_en)
     {
-        string file_name = string("scans.pcd");
-        string all_points_dir(string(string(ROOT_DIR) + "PCD/") + file_name);
-        pcl::PCDWriter pcd_writer;
-        cout << "current scan saved to /PCD/" << file_name<<endl;
-        pcd_writer.writeBinary(all_points_dir, *pcl_wait_save);
+        std::string saved_path;
+        if (save_to_pcd(saved_path)) {
+            cout << "[map_save] final map saved to " << saved_path << endl;
+        } else {
+            cout << "[map_save] nothing saved on exit: point buffer is empty." << endl;
+        }
     }
 
     if (runtime_pos_log)
