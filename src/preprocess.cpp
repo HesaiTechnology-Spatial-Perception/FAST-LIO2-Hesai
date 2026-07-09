@@ -593,10 +593,11 @@ void Preprocess::give_feature(pcl::PointCloud<PointType> &pl, vector<orgtype> &t
   }
   uint head = 0;
 
-  while(types[head].range < blind)
+  while(head < (uint)plsize && types[head].range < blind)
   {
     head++;
   }
+  if(head >= (uint)plsize) return; // whole scan inside the blind zone
 
   // Surf
   plsize2 = (plsize > group_size) ? (plsize - group_size) : 0;
