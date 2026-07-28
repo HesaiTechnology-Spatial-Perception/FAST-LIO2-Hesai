@@ -13,7 +13,8 @@ Checks:
   2. /lidar_imu topic exists
   3. PointCloud2 contains required fields: x y z intensity ring timestamp
   4. 'timestamp' is per-point and monotonically increasing within a frame
-  5. 'ring' range matches the declared model (JT16: 0–15, JT128: 0–127)
+  5. 'ring' range matches the declared model (JT16: 0–15, JT32: 0–31,
+     JT128: 0–127)
   6. IMU publish frequency
   7. Gyro magnitude — coarse deg/s vs rad/s sanity check
   8. frame_id of both sensors (for coordinate frame awareness)
@@ -54,6 +55,7 @@ except ImportError:
 # ── Constants ─────────────────────────────────────────────────────────────────
 MODEL_SPECS = {
     "jt16":  {"scan_line": 16},
+    "jt32":  {"scan_line": 32},
     "jt128": {"scan_line": 128},
 }
 REQUIRED_FIELDS = {"x", "y", "z", "intensity", "ring", "timestamp"}
@@ -296,12 +298,17 @@ class InputChecker:
         vals = _read_field(self.pc_msg, "ring", "<H", 2)
         if vals is None:
             print(f"{WARN} cannot auto-detect model: 'ring' field missing — "
-                  f"defaulting to JT128. Pass --model jt16/jt128 explicitly.")
+                  f"defaulting to JT128. Pass --model explicitly.")
             self.spec = MODEL_SPECS["jt128"]
             self.model_label = "JT128"
             return
         max_ring = max(vals)
-        model = "jt16" if max_ring <= 15 else "jt128"
+        if max_ring <= 15:
+            model = "jt16"
+        elif max_ring <= 31:
+            model = "jt32"
+        else:
+            model = "jt128"
         self.spec = MODEL_SPECS[model]
         self.model_label = model.upper()
         print(f"{INFO} auto-detected model: {self.model_label} "
@@ -357,8 +364,8 @@ class InputChecker:
         # If median > ~8.7 rad/s (500 deg/s), almost certainly published in deg/s.
         threshold = math.radians(500)
         if median > threshold:
-            print(f"{FAIL} gyro median ‖ω‖ = {median:.2f} — looks like deg/s "
-                  f"(> {math.degrees(threshold):.0f} deg/s). "
+            print(f"{FAIL} gyro median \u2016\u03c9\u2016 = {median:.2f} \u2014 implausible as rad/s "
+                  f"({math.degrees(median):.0f} deg/s equivalent); data is likely in deg/s. "
                   f"Set imu_gyr_unit: \"deg\" in yaml")
         elif median > math.radians(50):
             print(f"{WARN} gyro median ‖ω‖ = {median:.4f} rad/s — unusually high. "
@@ -410,7 +417,7 @@ def main():
                         help="IMU topic           (default: /lidar_imu)")
     parser.add_argument("--model",       default="auto",
                         choices=list(MODEL_SPECS.keys()) + ["auto"],
-                        help="LiDAR model: jt16, jt128, or auto "
+                        help="LiDAR model: jt16, jt32, jt128, or auto "
                              "(auto-detect from ring range; default: auto)")
     parser.add_argument("--timeout",     type=float, default=8.0,
                         help="Seconds to wait for messages  (default: 8.0)")

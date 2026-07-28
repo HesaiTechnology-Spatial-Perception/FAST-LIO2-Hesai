@@ -5,8 +5,9 @@
 <!-- Launch file for Hesai JT128 LiDAR -->
 
     <arg name="rviz" default="true" />
+    <arg name="config_file" default="$(find fast_lio)/config/jt128.yaml" />
 
-    <rosparam command="load" file="$(find fast_lio)/config/jt128.yaml" />
+    <rosparam command="load" file="$(arg config_file)" />
 
     <param name="feature_extract_enable" type="bool" value="0"/>
     <param name="point_filter_num" type="int" value="6"/>

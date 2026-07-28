@@ -8,3 +8,8 @@ Log/*.pdf
 .vscode/c_cpp_properties.json
 .vscode/settings.json
 PCD/*.pcd
+slam_raw_maps/
+*.log
+AGENTS.md
+.agents/
+.codex/

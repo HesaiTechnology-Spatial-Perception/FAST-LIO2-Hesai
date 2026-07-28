@@ -10,7 +10,7 @@
 // All rights reserved.
 //
 // Modified by Hesai Technology, 2026-06.
-// Modifications: adapted for Hesai JT16 / JT128 LiDARs; added /map_save
+// Modifications: adapted for Hesai JT16 / JT32 / JT128 LiDARs; added /map_save
 // service and pcd_save support; added imu_gyr_unit (deg/rad) parameter.
 //
 // Redistribution and use in source and binary forms, with or without
@@ -78,6 +78,9 @@ vector<double> T1, s_plot, s_plot2, s_plot3, s_plot4, s_plot5, s_plot6, s_plot7,
 double match_time = 0, solve_time = 0, solve_const_H_time = 0;
 int    kdtree_size_st = 0, kdtree_size_end = 0, add_point_size = 0, kdtree_delete_counter = 0;
 bool   runtime_pos_log = false, pcd_save_en = false, time_sync_en = false, extrinsic_est_en = true, path_en = true;
+double pcd_save_leaf_size = 0.0;   // >0: periodically voxel-downsample the save buffer
+bool   tum_save_en = false;        // export trajectory in TUM format to Log/traj_tum.txt
+ofstream fout_tum;
 /**************************/
 
 float res_last[100000] = {0.0};
@@ -297,6 +300,15 @@ void standard_pcl_cbk(const sensor_msgs::PointCloud2::ConstPtr &msg)
 
     PointCloudXYZI::Ptr  ptr(new PointCloudXYZI());
     p_pre->process(msg, ptr);
+    static bool scan_span_checked = false;
+    if (!scan_span_checked && ptr->points.size() > 100)
+    {
+        scan_span_checked = true;
+        const double span_ms = ptr->points.back().curvature;
+        if (span_ms <= 0.01 || span_ms > 1000.0)
+            ROS_WARN("per-scan time span %.4f ms is implausible; check preprocess/timestamp_unit "
+                     "(and that the driver outputs per-point timestamps)", span_ms);
+    }
     lidar_buffer.push_back(ptr);
     time_buffer.push_back(msg->header.stamp.toSec());
     last_timestamp_lidar = msg->header.stamp.toSec();
@@ -531,6 +543,18 @@ void publish_frame_world(const ros::Publisher & pubLaserCloudFull)
         }
         *pcl_wait_save += *laserCloudWorld;
 
+        static int compact_wait_num = 0;
+        if (pcd_save_leaf_size > 0 && ++compact_wait_num >= 100)
+        {
+            compact_wait_num = 0;
+            pcl::VoxelGrid<PointType> save_filter;
+            save_filter.setLeafSize(pcd_save_leaf_size, pcd_save_leaf_size, pcd_save_leaf_size);
+            save_filter.setInputCloud(pcl_wait_save);
+            PointCloudXYZI::Ptr compacted(new PointCloudXYZI());
+            save_filter.filter(*compacted);
+            pcl_wait_save = compacted;
+        }
+
         static int scan_wait_num = 0;
         scan_wait_num ++;
         if (pcl_wait_save->size() > 0 && pcd_save_interval > 0  && scan_wait_num >= pcd_save_interval)
@@ -610,6 +634,16 @@ bool save_to_pcd(std::string & out_path)
         out_path = std::string(ROOT_DIR) + "PCD/scans.pcd";
     }
 
+    if (pcd_save_leaf_size > 0)
+    {
+        pcl::VoxelGrid<PointType> save_filter;
+        save_filter.setLeafSize(pcd_save_leaf_size, pcd_save_leaf_size, pcd_save_leaf_size);
+        save_filter.setInputCloud(pcl_wait_save);
+        PointCloudXYZI::Ptr compacted(new PointCloudXYZI());
+        save_filter.filter(*compacted);
+        pcl_wait_save = compacted;
+    }
+
     pcl::PCDWriter pcd_writer;
     int ret = pcd_writer.writeBinary(out_path, *pcl_wait_save);
     return ret == 0;
@@ -635,11 +669,10 @@ bool map_save_callback(std_srvs::Trigger::Request & /*req*/,
     }
 
     std::string saved_path;
-    const size_t pt_count = pcl_wait_save->size();
     bool ok = save_to_pcd(saved_path);
     if (ok) {
         res.success = true;
-        res.message = "Saved " + std::to_string(pt_count) + " points to " + saved_path;
+        res.message = "Saved " + std::to_string(pcl_wait_save->size()) + " points to " + saved_path;
         ROS_INFO_STREAM("[map_save] " << res.message);
     } else {
         res.success = false;
@@ -669,6 +702,12 @@ void publish_odometry(const ros::Publisher & pubOdomAftMapped)
     odomAftMapped.header.stamp = ros::Time().fromSec(lidar_end_time);// ros::Time().fromSec(lidar_end_time);
     set_posestamp(odomAftMapped.pose);
     pubOdomAftMapped.publish(odomAftMapped);
+    if (tum_save_en && fout_tum)
+    {
+        fout_tum << std::fixed << std::setprecision(9) << lidar_end_time << " "
+                 << state_point.pos(0) << " " << state_point.pos(1) << " " << state_point.pos(2) << " "
+                 << geoQuat.x << " " << geoQuat.y << " " << geoQuat.z << " " << geoQuat.w << "\n";
+    }
     auto P = kf.get_P();
     for (int i = 0; i < 6; i ++)
     {
@@ -874,6 +913,14 @@ int main(int argc, char** argv)
     nh.param<bool>("mapping/extrinsic_est_en", extrinsic_est_en, true);
     nh.param<bool>("pcd_save/pcd_save_en", pcd_save_en, false);
     nh.param<int>("pcd_save/interval", pcd_save_interval, -1);
+    nh.param<double>("pcd_save/leaf_size", pcd_save_leaf_size, 0.0);
+    nh.param<bool>("trajectory_save/tum_en", tum_save_en, false);
+    if (tum_save_en)
+    {
+        fout_tum.open(DEBUG_FILE_DIR("traj_tum.txt"), ios::out);
+        if (!fout_tum)
+            ROS_WARN("cannot open %s for TUM trajectory export", DEBUG_FILE_DIR("traj_tum.txt").c_str());
+    }
     nh.param<vector<double>>("mapping/extrinsic_T", extrinT, vector<double>());
     nh.param<vector<double>>("mapping/extrinsic_R", extrinR, vector<double>());
 
@@ -886,6 +933,14 @@ int main(int argc, char** argv)
                  "it is ignored for Hesai JT. Use common/time_offset_lidar_to_imu "
                  "to compensate a fixed lidar-IMU time offset.");
     }
+    ROS_INFO("config summary: lid_topic=%s imu_topic=%s lidar_type=%d scan_line=%d "
+             "timestamp_unit=%d blind=%.2f det_range=%.1f imu_gyr_unit=%s "
+             "time_offset_lidar_to_imu=%.4f extrinsic_est_en=%d | "
+             "pcd_save_en=%d interval=%d leaf_size=%.2f map_file_path='%s' tum_en=%d",
+             lid_topic.c_str(), imu_topic.c_str(), p_pre->lidar_type, p_pre->N_SCANS,
+             p_pre->time_unit, p_pre->blind, DET_RANGE, imu_gyr_is_deg ? "deg" : "rad",
+             time_diff_lidar_to_imu, (int)extrinsic_est_en,
+             (int)pcd_save_en, pcd_save_interval, pcd_save_leaf_size, map_file_path.c_str(), (int)tum_save_en);
     
     path.header.stamp    = ros::Time::now();
     path.header.frame_id ="camera_init";

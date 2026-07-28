@@ -17,7 +17,7 @@
 #     --model      jt128 \
 #     --pcap       /data/input.pcap \
 #     --correction /data/correction.csv \
-#     --firetime   /data/firetime.csv \
+#     [--firetime  /data/firetime.csv] \
 #     --output     /data/output.bag \
 #     --driver-ws  ~/hesai_ros_ws
 #
@@ -71,17 +71,16 @@ while [[ $# -gt 0 ]]; do
 done
 
 # ── validation ────────────────────────────────────────────────────────────────
-[[ -n "$MODEL" ]]      || die "--model is required (jt16 or jt128)"
+[[ -n "$MODEL" ]]      || die "--model is required (jt16, jt32, or jt128)"
 [[ -n "$PCAP" ]]       || die "--pcap is required"
 [[ -n "$CORRECTION" ]] || die "--correction is required"
-[[ -n "$FIRETIME" ]]   || die "--firetime is required"
 [[ -n "$OUTPUT" ]]     || die "--output is required"
 [[ -n "$DRIVER_WS" ]]  || die "--driver-ws is required"
 
-[[ "$MODEL" == "jt16" || "$MODEL" == "jt128" ]] || die "--model must be jt16 or jt128"
+[[ "$MODEL" == "jt16" || "$MODEL" == "jt32" || "$MODEL" == "jt128" ]] || die "--model must be jt16, jt32, or jt128"
 [[ -f "$PCAP" ]]       || die "PCAP file not found: $PCAP"
 [[ -f "$CORRECTION" ]] || die "Correction file not found: $CORRECTION"
-[[ -f "$FIRETIME" ]]   || die "Firetime file not found: $FIRETIME"
+[[ -z "$FIRETIME" || -f "$FIRETIME" ]] || die "Firetime file not found: $FIRETIME"
 [[ -d "$DRIVER_WS" ]]  || die "Driver workspace not found: $DRIVER_WS"
 
 command -v roslaunch  >/dev/null 2>&1 || die "roslaunch not found. Source your ROS workspace."
@@ -133,11 +132,17 @@ if not cfg or "lidar" not in cfg or not cfg["lidar"]:
 
 drv = cfg["lidar"][0]["driver"]
 drv["source_type"] = 2
-drv.pop("lidar_udp_type", None)
+# Keep flat fields for older driver releases and pcap_type for newer releases.
+drv["pcap_path"] = "$PCAP"
+drv["correction_file_path"] = "$CORRECTION"
+drv["firetimes_path"] = "$FIRETIME"
+drv["pcap_play_synchronization"] = True
+drv["pcap_play_in_loop"] = False
+drv["play_rate_"] = $PLAY_RATE
 drv["pcap_type"] = {
     "pcap_path":             "$PCAP",
     "correction_file_path":  "$CORRECTION",
-    "firetime_file_path":    "$FIRETIME",
+    "firetimes_path":        "$FIRETIME",
     "pcap_play_synchronization": True,
     "pcap_play_in_loop":    False,
     "play_rate_":            $PLAY_RATE,
@@ -158,11 +163,21 @@ ok "Config generated: $TMP_CONFIG"
 # ── source driver workspace and back up config ────────────────────────────────
 info "Sourcing driver workspace: $DRIVER_WS"
 # shellcheck disable=SC1090
+set +u
 source "$DRIVER_WS/devel/setup.bash"
+set -u
 
 cp "$DRIVER_CONFIG" "$CONFIG_BACKUP"
 cp "$TMP_CONFIG"    "$DRIVER_CONFIG"
 info "Backed up original config → ${CONFIG_BACKUP}"
+
+# ── start rosbag recorder before playback ────────────────────────────────────
+OUTPUT_DIR=$(dirname "$OUTPUT")
+[[ -d "$OUTPUT_DIR" ]] || mkdir -p "$OUTPUT_DIR"
+info "Recording rosbag → $OUTPUT"
+rosbag record -O "$OUTPUT" "$LIDAR_TOPIC" "$IMU_TOPIC" &
+BAG_PID=$!
+sleep 1
 
 # ── start driver ──────────────────────────────────────────────────────────────
 info "Starting Hesai ROS Driver in PCAP mode..."
@@ -191,14 +206,6 @@ for f in ring timestamp; do
 done
 ok "Fields: $FIELDS"
 
-# ── start rosbag record ───────────────────────────────────────────────────────
-OUTPUT_DIR=$(dirname "$OUTPUT")
-[[ -d "$OUTPUT_DIR" ]] || mkdir -p "$OUTPUT_DIR"
-info "Recording rosbag → $OUTPUT"
-rosbag record -O "$OUTPUT" "$LIDAR_TOPIC" "$IMU_TOPIC" &
-BAG_PID=$!
-sleep 1   # allow rosbag to initialize
-
 # ── wait for PCAP to finish ───────────────────────────────────────────────────
 info "Recording... (waiting for PCAP playback to finish)"
 silence=0
@@ -206,7 +213,7 @@ while true; do
     if timeout "$SILENCE_TIMEOUT" rostopic echo -n 1 "$LIDAR_TOPIC" > /dev/null 2>&1; then
         silence=0
     else
-        (( silence++ ))
+        (( silence += 1 ))
         info "No data for ${silence}×${SILENCE_TIMEOUT}s..."
         [[ $silence -ge 2 ]] && break
     fi
@@ -225,6 +232,8 @@ info "Validating output bag..."
 BAG_INFO=$(rosbag info "$OUTPUT" 2>/dev/null)
 echo "$BAG_INFO" | grep -q "$LIDAR_TOPIC" || warn "/lidar_points not found in bag."
 echo "$BAG_INFO" | grep -q "$IMU_TOPIC"   || warn "/lidar_imu not found in bag."
+echo "$BAG_INFO" | grep "$LIDAR_TOPIC" | grep -Eq 'messages: [1-9][0-9]*' || die "$LIDAR_TOPIC has no messages in bag."
+echo "$BAG_INFO" | grep "$IMU_TOPIC" | grep -Eq 'messages: [1-9][0-9]*' || die "$IMU_TOPIC has no messages in bag."
 
 DURATION=$(echo "$BAG_INFO" | grep "duration:" | awk '{print $2}')
 SIZE=$(du -sh "$OUTPUT" | awk '{print $1}')

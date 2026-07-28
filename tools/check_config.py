@@ -44,6 +44,7 @@ INFO = "\033[94m[INFO]\033[0m"
 # expected per-model values
 MODEL_SPECS = {
     "jt16":  {"scan_line": 16,  "lidar_type": {1: 5, 2: 1}},
+    "jt32":  {"scan_line": 32,  "lidar_type": {1: 7, 2: 3}},
     "jt128": {"scan_line": 128, "lidar_type": {1: 6, 2: 2}},
 }
 
@@ -218,7 +219,7 @@ def main():
         description="Statically validate a FAST-LIO2 (Hesai JT) yaml config")
     parser.add_argument("--config", required=True, help="Path to the yaml config")
     parser.add_argument("--model",  required=True, choices=list(MODEL_SPECS.keys()),
-                        help="LiDAR model: jt16 or jt128")
+                        help="LiDAR model: jt16, jt32, or jt128")
     parser.add_argument("--ros",    type=int, required=True, choices=[1, 2],
                         help="ROS version: 1 or 2 (lidar_type enum differs)")
     args = parser.parse_args()

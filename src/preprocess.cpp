@@ -5,7 +5,7 @@
 // (https://github.com/hku-mars/FAST_LIO) by the MARS Lab, HKU.
 // Modified by Hesai Technology, 2026-06:
 //   - Retained only Hesai JT handler; added hesai_handler() for
-//     JT16 / JT128 PointCloud2 parsing with ring + timestamp fields.
+//     JT16 / JT32 / JT128 PointCloud2 parsing with ring + timestamp fields.
 #include "preprocess.h"
 
 #define RETURN0     0x00
@@ -93,6 +93,10 @@ void Preprocess::process(const sensor_msgs::PointCloud2::ConstPtr &msg, PointClo
     break;
     
   case JT128:
+    hesai_handler(msg);
+    break;
+
+  case JT32:
     hesai_handler(msg);
     break;
 

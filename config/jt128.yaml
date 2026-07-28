@@ -38,3 +38,7 @@ publish:
 pcd_save:
     pcd_save_en: false
     interval: -1
+    leaf_size: 0.0           # >0: voxel-downsample the saved map (m); bounds memory on long runs
+
+trajectory_save:
+    tum_en: false            # true: export trajectory to Log/traj_tum.txt (TUM format)

@@ -1,7 +1,7 @@
 ---
 name: run-fastlio2-hesai-ros1
 description: >-
-  Set up and run FAST-LIO2 on Hesai JT16 / JT128 LiDARs on ROS 1 Melodic /
+  Set up and run FAST-LIO2 on Hesai JT16 / JT32 / JT128 LiDARs on ROS 1 Melodic /
   Noetic (FAST_LIO_Hesai main branch). Detects and configures the local ROS 1
   environment, then runs FAST-LIO2 from a PCAP capture, an existing rosbag, or
   a live sensor. Use when building, configuring, validating, or running
@@ -29,7 +29,7 @@ Target: **ROS 1 Melodic / Noetic**. Build with `catkin_make`, launch with
 
 **Do not ask the user for the model — detect it automatically from the data.**
 The model is determined by the point cloud `ring` field: max ring ≤ 15 → JT16,
-otherwise → JT128.
+max ring ≤ 31 → JT32, otherwise → JT128.
 
 With the sensor publishing or a rosbag playing (see Step 3), run:
 
@@ -38,12 +38,17 @@ rosrun fast_lio check_input.py          # --model defaults to "auto"
 ```
 
 It prints e.g. `auto-detected model: JT16 (ring max=15)`. Record the detected
-model as `MODEL` (`jt16` or `jt128`) and substitute it in every command below.
+model as `MODEL` (`jt16`, `jt32`, or `jt128`) and substitute it below.
 
 | Model | Lines | Config | Launch file | `lidar_type` (ROS 1) |
 | --- | --- | --- | --- | --- |
 | JT16 | 16 | `config/jt16.yaml` | `mapping_jt16.launch` | 5 |
+| JT32 | 32 | `config/jt32.yaml` | `mapping_jt32.launch` | 7 |
 | JT128 | 128 | `config/jt128.yaml` | `mapping_jt128.launch` | 6 |
+
+> JT32 support is pre-adapted in FAST-LIO2, but the current public Hesai ROS
+> Driver does not parse JT32 UDP 1.12. JT32 currently requires the validated
+> internal compatible driver.
 
 > If no data is flowing yet, first bring up the source (Step 3 Path C for a live
 > sensor, or play a bag), then run the detection above.
@@ -93,7 +98,7 @@ source devel/setup.bash
 ### Path A: PCAP → rosbag
 
 ```bash
-# Replace $MODEL with jt16 or jt128
+# Replace $MODEL with jt16, jt32, or jt128
 bash tools/pcap_to_rosbag/pcap_to_rosbag_ros1.sh \
   --model      $MODEL \
   --pcap       /path/to/input.pcap \
@@ -151,7 +156,7 @@ out in `src/laserMapping.cpp`). To view the full accumulated map, save a PCD
 
 ## Step 6: Save the PCD map (optional)
 
-Both models default `pcd_save_en: false` on ROS 1. Enable saving in
+All models default `pcd_save_en: false` on ROS 1. Enable saving in
 `config/$MODEL.yaml`:
 
 ```yaml
@@ -159,6 +164,7 @@ map_file_path: "PCD/fast_lio2_jt_map.pcd"   # optional; default PCD/scans.pcd
 pcd_save:
   pcd_save_en: true
   interval: -1     # -1 = save once on exit; >0 = save every N frames
+  leaf_size: 0.0   # >0 = voxel-downsample the saved map (meters)
 ```
 
 Two ways to trigger the save:

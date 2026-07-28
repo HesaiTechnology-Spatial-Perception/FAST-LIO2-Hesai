@@ -1,11 +1,9 @@
 <!-- Copyright 2026 Hesai Technology. All rights reserved. -->
 <!-- SPDX-License-Identifier: GPL-2.0 -->
-<!-- Launch file for FAST-LIO2 with Hesai JT16 LiDAR (ROS 1). -->
+<!-- Launch file for FAST-LIO2 with Hesai JT32 LiDAR (ROS 1). -->
 <launch>
-<!-- Launch file for Hesai JT16 LiDAR -->
-
     <arg name="rviz" default="true" />
-    <arg name="config_file" default="$(find fast_lio)/config/jt16.yaml" />
+    <arg name="config_file" default="$(find fast_lio)/config/jt32.yaml" />
 
     <rosparam command="load" file="$(arg config_file)" />
 
@@ -19,7 +17,6 @@
     <node pkg="fast_lio" type="fastlio_mapping" name="laserMapping" output="screen" />
 
     <group if="$(arg rviz)">
-    <node launch-prefix="nice" pkg="rviz" type="rviz" name="rviz" args="-d $(find fast_lio)/rviz_cfg/loam_livox.rviz" />
+        <node launch-prefix="nice" pkg="rviz" type="rviz" name="rviz" args="-d $(find fast_lio)/rviz_cfg/loam_livox.rviz" />
     </group>
-
 </launch>
