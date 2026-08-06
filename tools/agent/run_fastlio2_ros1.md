@@ -14,6 +14,20 @@ description: >-
 Target: **ROS 1 Melodic / Noetic**. Build with `catkin_make`, launch with
 `roslaunch`. Package name: `fast_lio`.
 
+## Recommended customer entry
+
+```bash
+./tools/run_fastlio.sh jt128 live
+./tools/run_fastlio.sh jt32 bag /data/jt32.bag
+./tools/run_fastlio.sh jt16 bag /data/jt16.bag --play-rate 2.0
+./tools/run_fastlio.sh jt128 pcap /data/JT128/input.pcap
+```
+
+This entry starts the required processes, handles playback or conversion, and
+cleans up on exit. For bag input it reads the first valid IMU sample and sets
+`deg` or `rad` explicitly before launch. `--play-rate RATE` controls bag/PCAP
+replay speed. Use the detailed workflow below for diagnosis.
+
 ## Workflow checklist
 
 ```
@@ -98,17 +112,17 @@ source devel/setup.bash
 ### Path A: PCAP → rosbag
 
 ```bash
-# Replace $MODEL with jt16, jt32, or jt128
-bash tools/pcap_to_rosbag/pcap_to_rosbag_ros1.sh \
-  --model      $MODEL \
-  --pcap       /path/to/input.pcap \
-  --correction /path/to/correction.csv \
-  --firetime   /path/to/firetime.csv \
-  --output     /path/to/output.bag \
-  --driver-ws  ~/hesai_ros_ws
+# Set once only when the driver workspace cannot be discovered automatically.
+export HESAI_DRIVER_WS=~/hesai_ros_ws
+
+# The JT16/JT32/JT128 directory name supplies the model.
+bash tools/pcap_to_rosbag/pcap_to_rosbag_ros1.sh /path/to/JT128/input.pcap
 ```
 
-Output is a `.bag` file. Continue with Path B.
+The script discovers calibration files and writes
+`/path/to/JT128/input_ros1.bag`. Run the same command with `--dry-run` first
+when reviewing paths. Add named options only when auto-discovery reports a
+specific missing value. Continue with Path B.
 
 ### Path B: Run from a rosbag
 
@@ -145,6 +159,12 @@ rosrun fast_lio check_input.py --model $MODEL --timestamp-unit 0
 
 Resolve any FAIL before running.
 
+Keep `common.imu_gyr_unit: "auto"` for JT16, JT32, and JT128. Hesai ROS
+Driver 2.0.10/2.0.11 publishes SI units (`rad/s`, `m/s²`), while 2.0.12
+publishes the SDK-scale values (`deg/s`, `g`). FAST-LIO2 detects the pair from
+the startup acceleration norm and converts angular velocity when required.
+Use `"deg"` or `"rad"` only as a manual override.
+
 ## Step 5: View results in RViz
 
 RViz opens with the launch file. Set **Fixed Frame** to `camera_init`,
@@ -156,27 +176,18 @@ out in `src/laserMapping.cpp`). To view the full accumulated map, save a PCD
 
 ## Step 6: Save the PCD map (optional)
 
-All models default `pcd_save_en: false` on ROS 1. Enable saving in
-`config/$MODEL.yaml`:
-
-```yaml
-map_file_path: "PCD/fast_lio2_jt_map.pcd"   # optional; default PCD/scans.pcd
-pcd_save:
-  pcd_save_en: true
-  interval: -1     # -1 = save once on exit; >0 = save every N frames
-  leaf_size: 0.0   # >0 = voxel-downsample the saved map (meters)
-```
-
-Two ways to trigger the save:
-- **On exit**: stop the FAST-LIO2 node (`Ctrl+C`) — the map is written once.
-- **On demand while running**: call the service:
+All models keep PCD buffering off by default. For the unified ROS 1/ROS 2
+customer behavior, add `--save-map` to the one-command entry:
 
 ```bash
-rosservice call /map_save "{}"
+./tools/run_fastlio.sh jt128 live --save-map
+./tools/run_fastlio.sh jt128 bag /data/input.bag \
+  --save-map ~/slam_ws/src/slam_maps/customer_site.pcd
 ```
 
-`pcd_save_en: true` is required for `/map_save` to work. The file goes to
-`map_file_path` (relative paths resolve under the package root).
+The script temporarily enables buffering, calls `/map_save`, and reports the
+path. Without an explicit path it writes a timestamped file under
+`~/slam_ws/src/slam_maps/`.
 
 ## Step 7: Analyze map quality (optional)
 

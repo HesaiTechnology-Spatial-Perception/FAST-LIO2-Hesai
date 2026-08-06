@@ -9,7 +9,6 @@
 #include <sensor_msgs/Imu.h>
 #include <nav_msgs/Odometry.h>
 #include <tf/transform_broadcaster.h>
-#include <eigen_conversions/eigen_msg.h>
 
 using namespace std;
 using namespace Eigen;

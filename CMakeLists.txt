@@ -60,7 +60,6 @@ find_package(catkin REQUIRED COMPONENTS
   tf
   ${FAST_LIO_LIVOX_COMPONENT}
   message_generation
-  eigen_conversions
 )
 
 find_package(Eigen3 REQUIRED)
@@ -102,7 +101,13 @@ catkin_install_python(PROGRAMS
 )
 
 install(PROGRAMS
+  tools/run_fastlio.sh
   tools/pcap_to_rosbag/pcap_to_rosbag_ros1.sh
   tools/pcap_to_rosbag/pcap_to_rosbag_ros2.sh
+  DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
+)
+
+install(FILES
+  tools/pcap_to_rosbag/common.sh
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )

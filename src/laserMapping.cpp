@@ -11,7 +11,7 @@
 //
 // Modified by Hesai Technology, 2026-06.
 // Modifications: adapted for Hesai JT16 / JT32 / JT128 LiDARs; added /map_save
-// service and pcd_save support; added imu_gyr_unit (deg/rad) parameter.
+// service and pcd_save support; added imu_gyr_unit (auto/deg/rad) parameter.
 //
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions are met:
@@ -37,6 +37,8 @@
 // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
 #include <omp.h>
+#include <algorithm>
+#include <cmath>
 #include <mutex>
 #include <math.h>
 #include <thread>
@@ -78,6 +80,7 @@ vector<double> T1, s_plot, s_plot2, s_plot3, s_plot4, s_plot5, s_plot6, s_plot7,
 double match_time = 0, solve_time = 0, solve_const_H_time = 0;
 int    kdtree_size_st = 0, kdtree_size_end = 0, add_point_size = 0, kdtree_delete_counter = 0;
 bool   runtime_pos_log = false, pcd_save_en = false, time_sync_en = false, extrinsic_est_en = true, path_en = true;
+bool   pcd_save_dirty = false;
 double pcd_save_leaf_size = 0.0;   // >0: periodically voxel-downsample the save buffer
 bool   tum_save_en = false;        // export trajectory in TUM format to Log/traj_tum.txt
 ofstream fout_tum;
@@ -106,6 +109,9 @@ bool   lidar_pushed, flg_first_scan = true, flg_exit = false, flg_EKF_inited;
 bool   scan_pub_en = false, dense_pub_en = false, scan_body_pub_en = false;
 int lidar_type;
 bool imu_gyr_is_deg = false;
+bool imu_gyr_unit_resolved = false;
+string imu_gyr_unit_mode = "auto";
+vector<double> imu_acc_norm_samples;
 
 vector<vector<int>>  pointSearchInd_surf; 
 vector<BoxPointType> cub_needrm;
@@ -355,6 +361,39 @@ void livox_pcl_cbk(const livox_ros_driver::CustomMsg::ConstPtr &msg)
 }
 #endif
 
+bool resolve_imu_gyr_unit(const sensor_msgs::Imu &msg)
+{
+    if (imu_gyr_unit_resolved)
+        return true;
+
+    const double ax = msg.linear_acceleration.x;
+    const double ay = msg.linear_acceleration.y;
+    const double az = msg.linear_acceleration.z;
+    const double acc_norm = sqrt(ax * ax + ay * ay + az * az);
+    if (!std::isfinite(acc_norm) || acc_norm < 0.1)
+        return false;
+
+    imu_acc_norm_samples.push_back(acc_norm);
+    vector<double> samples = imu_acc_norm_samples;
+    std::sort(samples.begin(), samples.end());
+    const double median_acc_norm = samples[samples.size() / 2];
+    if (median_acc_norm >= 4.0 && median_acc_norm <= 6.0)
+    {
+        ROS_WARN("cannot auto-detect IMU units from median acceleration norm %.3f; "
+                 "keep the sensor stationary or set common/imu_gyr_unit to 'deg' or 'rad'",
+                 median_acc_norm);
+        imu_acc_norm_samples.clear();
+        return false;
+    }
+    imu_gyr_is_deg = median_acc_norm < 4.0;
+    imu_gyr_unit_resolved = true;
+    ROS_INFO("auto-detected IMU units from median acceleration norm %.3f: "
+             "driver gyro output is %s; FAST-LIO2 will %s",
+             median_acc_norm, imu_gyr_is_deg ? "deg/s" : "rad/s",
+             imu_gyr_is_deg ? "convert it to rad/s" : "use it directly");
+    return true;
+}
+
 void imu_cbk(const sensor_msgs::Imu::ConstPtr &msg_in) 
 {
     publish_count ++;
@@ -368,7 +407,25 @@ void imu_cbk(const sensor_msgs::Imu::ConstPtr &msg_in)
         ros::Time().fromSec(timediff_lidar_wrt_imu + msg_in->header.stamp.toSec());
     }
 
-    if (imu_gyr_is_deg)
+    const bool was_resolved = imu_gyr_unit_resolved;
+    resolve_imu_gyr_unit(*msg);
+
+    mtx_buffer.lock();
+    // Auto mode buffers IMU from the first message, but sync_packages() waits
+    // until the unit decision is available. Convert that buffered prefix once.
+    if (!was_resolved && imu_gyr_unit_resolved && imu_gyr_is_deg)
+    {
+        for (auto &buffered_msg : imu_buffer)
+        {
+            sensor_msgs::Imu::Ptr converted(new sensor_msgs::Imu(*buffered_msg));
+            converted->angular_velocity.x *= M_PI / 180.0;
+            converted->angular_velocity.y *= M_PI / 180.0;
+            converted->angular_velocity.z *= M_PI / 180.0;
+            buffered_msg = converted;
+        }
+    }
+
+    if (imu_gyr_unit_resolved && imu_gyr_is_deg)
     {
         msg->angular_velocity.x *= M_PI / 180.0;
         msg->angular_velocity.y *= M_PI / 180.0;
@@ -376,9 +433,6 @@ void imu_cbk(const sensor_msgs::Imu::ConstPtr &msg_in)
     }
 
     double timestamp = msg->header.stamp.toSec();
-
-    mtx_buffer.lock();
-
     if (timestamp < last_timestamp_imu)
     {
         ROS_WARN("imu loop back, clear buffer");
@@ -386,7 +440,6 @@ void imu_cbk(const sensor_msgs::Imu::ConstPtr &msg_in)
     }
 
     last_timestamp_imu = timestamp;
-
     imu_buffer.push_back(msg);
     mtx_buffer.unlock();
     sig_buffer.notify_all();
@@ -396,7 +449,7 @@ double lidar_mean_scantime = 0.0;
 int    scan_num = 0;
 bool sync_packages(MeasureGroup &meas)
 {
-    if (lidar_buffer.empty() || imu_buffer.empty()) {
+    if (!imu_gyr_unit_resolved || lidar_buffer.empty() || imu_buffer.empty()) {
         return false;
     }
 
@@ -542,6 +595,7 @@ void publish_frame_world(const ros::Publisher & pubLaserCloudFull)
                                 &laserCloudWorld->points[i]);
         }
         *pcl_wait_save += *laserCloudWorld;
+        pcd_save_dirty = true;
 
         static int compact_wait_num = 0;
         if (pcd_save_leaf_size > 0 && ++compact_wait_num >= 100)
@@ -565,6 +619,7 @@ void publish_frame_world(const ros::Publisher & pubLaserCloudFull)
             cout << "current scan saved to /PCD/" << all_points_dir << endl;
             pcd_writer.writeBinary(all_points_dir, *pcl_wait_save);
             pcl_wait_save->clear();
+            pcd_save_dirty = false;
             scan_wait_num = 0;
         }
     }
@@ -646,6 +701,7 @@ bool save_to_pcd(std::string & out_path)
 
     pcl::PCDWriter pcd_writer;
     int ret = pcd_writer.writeBinary(out_path, *pcl_wait_save);
+    if (ret == 0) pcd_save_dirty = false;
     return ret == 0;
 }
 
@@ -900,9 +956,23 @@ int main(int argc, char** argv)
     nh.param<int>("preprocess/scan_rate", p_pre->SCAN_RATE, 10);
     nh.param<int>("point_filter_num", p_pre->point_filter_num, 2);
     nh.param<bool>("feature_extract_enable", p_pre->feature_enabled, false);
-    string imu_gyr_unit_str;
-    nh.param<string>("common/imu_gyr_unit", imu_gyr_unit_str, "rad");
-    imu_gyr_is_deg = (imu_gyr_unit_str == "deg");
+    nh.param<string>("common/imu_gyr_unit", imu_gyr_unit_mode, "auto");
+    if (imu_gyr_unit_mode == "deg")
+    {
+        imu_gyr_is_deg = true;
+        imu_gyr_unit_resolved = true;
+    }
+    else if (imu_gyr_unit_mode == "rad")
+    {
+        imu_gyr_is_deg = false;
+        imu_gyr_unit_resolved = true;
+    }
+    else if (imu_gyr_unit_mode != "auto")
+    {
+        ROS_ERROR("common/imu_gyr_unit must be 'auto', 'deg', or 'rad' (got '%s')",
+                  imu_gyr_unit_mode.c_str());
+        return -1;
+    }
     nh.param<bool>("runtime_pos_log_enable", runtime_pos_log, 0);
     if (runtime_pos_log)
     {
@@ -938,7 +1008,7 @@ int main(int argc, char** argv)
              "time_offset_lidar_to_imu=%.4f extrinsic_est_en=%d | "
              "pcd_save_en=%d interval=%d leaf_size=%.2f map_file_path='%s' tum_en=%d",
              lid_topic.c_str(), imu_topic.c_str(), p_pre->lidar_type, p_pre->N_SCANS,
-             p_pre->time_unit, p_pre->blind, DET_RANGE, imu_gyr_is_deg ? "deg" : "rad",
+             p_pre->time_unit, p_pre->blind, DET_RANGE, imu_gyr_unit_mode.c_str(),
              time_diff_lidar_to_imu, (int)extrinsic_est_en,
              (int)pcd_save_en, pcd_save_interval, pcd_save_leaf_size, map_file_path.c_str(), (int)tum_save_en);
     
@@ -1190,7 +1260,7 @@ int main(int argc, char** argv)
     /**************** save map ****************/
     /* 1. make sure you have enough memories
     /* 2. pcd save will largely influence the real-time performences **/
-    if (pcd_save_en)
+    if (pcd_save_en && pcd_save_dirty)
     {
         std::string saved_path;
         if (save_to_pcd(saved_path)) {
