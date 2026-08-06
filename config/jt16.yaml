@@ -10,14 +10,13 @@
         filter_size_map: 0.5
         cube_side_length: 1000.0
         runtime_pos_log_enable: false
-        map_file_path: "PCD/fast_lio2_lidar_only_map.pcd"
 
         common:
             lid_topic:  "/lidar_points"
             imu_topic:  "/lidar_imu"
             time_sync_en: false
             time_offset_lidar_to_imu: 0.0
-            imu_gyr_unit: "deg"          # "rad" or "deg"
+            imu_gyr_unit: "auto"         # auto-detect from acceleration; manual: "rad" or "deg"
 
         preprocess:
             lidar_type: 1                # 1: Hesai JT16
@@ -47,7 +46,7 @@
             scan_bodyframe_pub_en: true
 
         pcd_save:
-            pcd_save_en: true
+            pcd_save_en: false
             interval: -1
             leaf_size: 0.0           # >0: voxel-downsample the saved map (m); bounds memory on long runs
 

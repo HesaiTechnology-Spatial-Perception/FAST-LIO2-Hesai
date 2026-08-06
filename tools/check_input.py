@@ -16,7 +16,7 @@ Checks:
   5. 'ring' range matches the declared model (JT16: 0–15, JT32: 0–31,
      JT128: 0–127)
   6. IMU publish frequency
-  7. Gyro magnitude — coarse deg/s vs rad/s sanity check
+  7. Driver IMU units — raw g + deg/s vs SI m/s² + rad/s
   8. frame_id of both sensors (for coordinate frame awareness)
 
 Usage (ROS 2):
@@ -352,26 +352,32 @@ class InputChecker:
         else:
             print(f"{PASS} IMU frequency: {freq:.1f} Hz")
 
-    # 7 ── gyro magnitude (deg/s vs rad/s detection)
+    # 7 ── driver IMU unit mode (raw g + deg/s vs SI m/s² + rad/s)
     def _check_gyro_unit(self):
-        mags = []
+        gyro_mags = []
+        acc_mags = []
         for m in self.imu_msgs[:50]:
             g = m.angular_velocity
-            mags.append(math.sqrt(g.x**2 + g.y**2 + g.z**2))
-        median = sorted(mags)[len(mags) // 2]
+            a = m.linear_acceleration
+            gyro_mags.append(math.sqrt(g.x**2 + g.y**2 + g.z**2))
+            acc_mags.append(math.sqrt(a.x**2 + a.y**2 + a.z**2))
+        median_gyro = sorted(gyro_mags)[len(gyro_mags) // 2]
+        median_acc = sorted(acc_mags)[len(acc_mags) // 2]
 
-        # Typical gyro at rest or mild motion: << 1 rad/s.
-        # If median > ~8.7 rad/s (500 deg/s), almost certainly published in deg/s.
-        threshold = math.radians(500)
-        if median > threshold:
-            print(f"{FAIL} gyro median \u2016\u03c9\u2016 = {median:.2f} \u2014 implausible as rad/s "
-                  f"({math.degrees(median):.0f} deg/s equivalent); data is likely in deg/s. "
-                  f"Set imu_gyr_unit: \"deg\" in yaml")
-        elif median > math.radians(50):
-            print(f"{WARN} gyro median ‖ω‖ = {median:.4f} rad/s — unusually high. "
-                  f"Verify imu_gyr_unit matches your driver output")
+        # Hesai ROS Driver versions switch acceleration and gyro units together.
+        # Raw SDK output is near 1 g + deg/s; ROS-conformant output is near
+        # 9.81 m/s² + rad/s. Acceleration is reliable even while stationary.
+        if median_acc < 4.0:
+            print(f"{INFO} driver IMU output is raw: median ‖a‖={median_acc:.3f} g, "
+                  f"gyro is deg/s (median ‖ω‖={median_gyro:.3f}). "
+                  f"Use common.imu_gyr_unit: \"auto\" (recommended) or \"deg\"")
+        elif median_acc > 6.0:
+            print(f"{PASS} driver IMU output is SI: median ‖a‖={median_acc:.3f} m/s², "
+                  f"gyro is rad/s (median ‖ω‖={median_gyro:.4f}). "
+                  f"Use common.imu_gyr_unit: \"auto\" (recommended) or \"rad\"")
         else:
-            print(f"{PASS} gyro magnitude: {median:.4f} rad/s — normal range")
+            print(f"{WARN} cannot infer driver IMU units: median ‖a‖={median_acc:.3f}. "
+                  f"Keep the sensor stationary at startup or set imu_gyr_unit manually")
 
     # 9 ── LiDAR / IMU time-base synchronization
     def _check_lidar_imu_sync(self):

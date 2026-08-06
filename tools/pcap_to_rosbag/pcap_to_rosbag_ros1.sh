@@ -12,14 +12,13 @@
 #     → rosbag record
 #     → output.bag
 #
-# Usage:
-#   bash pcap_to_rosbag_ros1.sh \
-#     --model      jt128 \
-#     --pcap       /data/input.pcap \
-#     --correction /data/correction.csv \
-#     [--firetime  /data/firetime.csv] \
-#     --output     /data/output.bag \
-#     --driver-ws  ~/hesai_ros_ws
+# Quick start:
+#   pcap_to_rosbag_ros1.sh /data/JT128/input.pcap
+#
+# The model is inferred from a JT16/JT32/JT128 path. The script also discovers
+# the driver workspace, calibration files, and output path. With exactly one
+# PCAP in the current directory, no argument is needed. Use --help to see all
+# overrides and --dry-run to inspect the resolved values without starting ROS.
 #
 # Requirements:
 #   - ROS 1 (Melodic or Noetic) sourced
@@ -47,57 +46,58 @@ IMU_TOPIC="/lidar_imu"
 TOPIC_WAIT_TIMEOUT=30      # seconds to wait for topics to appear
 SILENCE_TIMEOUT=4          # seconds of silence to declare PCAP done
 PLAY_RATE=1.0
+TIMESTAMP_OFFSET=0.0
+DRY_RUN=false
 
 # ── argument parsing ─────────────────────────────────────────────────────────
 usage() {
-    grep '^#' "$0" | grep -v '^#!/' | sed 's/^# \{0,2\}//'
+    cat <<'EOF'
+Usage: pcap_to_rosbag_ros1.sh [PCAP] [options]
+
+Quick start:
+  pcap_to_rosbag_ros1.sh /data/JT128/input.pcap
+
+With exactly one PCAP in a JT16/JT32/JT128 directory, PCAP may be omitted.
+Defaults are printed before conversion. Use --dry-run to inspect them safely.
+
+Options:
+  --model MODEL              jt16, jt32, or jt128 (normally inferred)
+  --pcap PATH                Alternative to the positional PCAP path
+  --correction PATH          Angle correction file (normally discovered)
+  --firetime PATH            Firetime correction file (normally discovered)
+  --output PATH              Output .bag path
+  --driver-ws PATH           Hesai ROS 1 driver workspace
+  --play-rate RATE           PCAP playback speed (default: 1.0)
+  --timestamp-offset SEC     Add seconds to driver timestamps (default: 0)
+  --lidar-topic TOPIC        Point cloud topic (default: /lidar_points)
+  --imu-topic TOPIC          IMU topic (default: /lidar_imu)
+  --dry-run                  Resolve inputs only; do not start ROS
+  -h, --help                 Show this help
+
+The driver workspace may also be set with HESAI_DRIVER_WS.
+EOF
     exit 0
 }
 
-while [[ $# -gt 0 ]]; do
-    case "$1" in
-        --model)       MODEL="$2";       shift 2 ;;
-        --pcap)        PCAP="$2";        shift 2 ;;
-        --correction)  CORRECTION="$2";  shift 2 ;;
-        --firetime)    FIRETIME="$2";    shift 2 ;;
-        --output)      OUTPUT="$2";      shift 2 ;;
-        --driver-ws)   DRIVER_WS="$2";   shift 2 ;;
-        --play-rate)   PLAY_RATE="$2";   shift 2 ;;
-        --lidar-topic) LIDAR_TOPIC="$2"; shift 2 ;;
-        --imu-topic)   IMU_TOPIC="$2";   shift 2 ;;
-        -h|--help)     usage ;;
-        *) die "Unknown argument: $1" ;;
-    esac
-done
-
-# ── validation ────────────────────────────────────────────────────────────────
-[[ -n "$MODEL" ]]      || die "--model is required (jt16, jt32, or jt128)"
-[[ -n "$PCAP" ]]       || die "--pcap is required"
-[[ -n "$CORRECTION" ]] || die "--correction is required"
-[[ -n "$OUTPUT" ]]     || die "--output is required"
-[[ -n "$DRIVER_WS" ]]  || die "--driver-ws is required"
-
-[[ "$MODEL" == "jt16" || "$MODEL" == "jt32" || "$MODEL" == "jt128" ]] || die "--model must be jt16, jt32, or jt128"
-[[ -f "$PCAP" ]]       || die "PCAP file not found: $PCAP"
-[[ -f "$CORRECTION" ]] || die "Correction file not found: $CORRECTION"
-[[ -z "$FIRETIME" || -f "$FIRETIME" ]] || die "Firetime file not found: $FIRETIME"
-[[ -d "$DRIVER_WS" ]]  || die "Driver workspace not found: $DRIVER_WS"
-
-command -v roslaunch  >/dev/null 2>&1 || die "roslaunch not found. Source your ROS workspace."
-command -v rosbag     >/dev/null 2>&1 || die "rosbag not found."
-command -v rostopic   >/dev/null 2>&1 || die "rostopic not found."
 command -v python3    >/dev/null 2>&1 || die "python3 not found."
 python3 -c "import yaml" 2>/dev/null  || die "PyYAML not found. Run: pip3 install pyyaml"
 
-# ── find driver config ────────────────────────────────────────────────────────
-DRIVER_CONFIG=""
-for candidate in \
-    "$DRIVER_WS/src/HesaiLidar_ROS_2.0/config/config.yaml" \
-    "$DRIVER_WS/src/hesai_ros_driver/config/config.yaml" \
-    "$DRIVER_WS/src/HesaiLidar_ROS/config/config.yaml"; do
-    [[ -f "$candidate" ]] && { DRIVER_CONFIG="$candidate"; break; }
-done
-[[ -n "$DRIVER_CONFIG" ]] || die "Cannot find Hesai ROS Driver config.yaml in $DRIVER_WS. Pass --driver-ws pointing to the catkin workspace root."
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+# shellcheck source=common.sh
+source "$SCRIPT_DIR/common.sh"
+pcap_parse_args "$@"
+pcap_resolve_defaults 1
+
+if [[ "$DRY_RUN" == true ]]; then
+    ok "Dry run complete; ROS was not started and no files were changed."
+    exit 0
+fi
+
+[[ ! -e "$OUTPUT" ]] || die "Output already exists: $OUTPUT"
+[[ -f "$DRIVER_WS/devel/setup.bash" ]] || die "ROS 1 driver workspace is not built: $DRIVER_WS/devel/setup.bash missing"
+command -v roslaunch  >/dev/null 2>&1 || die "roslaunch not found. Source your ROS workspace."
+command -v rosbag     >/dev/null 2>&1 || die "rosbag not found."
+command -v rostopic   >/dev/null 2>&1 || die "rostopic not found."
 
 info "Driver config: $DRIVER_CONFIG"
 
@@ -139,6 +139,7 @@ drv["firetimes_path"] = "$FIRETIME"
 drv["pcap_play_synchronization"] = True
 drv["pcap_play_in_loop"] = False
 drv["play_rate_"] = $PLAY_RATE
+drv["ros_timestamp_offset"] = $TIMESTAMP_OFFSET
 drv["pcap_type"] = {
     "pcap_path":             "$PCAP",
     "correction_file_path":  "$CORRECTION",
@@ -257,7 +258,7 @@ echo "  Terminal 2:"
 echo "    rosbag play $OUTPUT"
 echo ""
 echo -e "${YEL}Notes:${NC}"
-echo "  - Verify imu_gyr_unit in config/${MODEL}.yaml matches the driver output (deg or rad)."
+echo "  - Keep imu_gyr_unit: auto (recommended); use deg/rad only as a manual override."
 echo "  - If timestamp_unit in config/${MODEL}.yaml is wrong, motion undistortion will fail."
 echo "  - Run tools/check_input.py to validate the bag before starting FAST-LIO2:"
 echo "      rosbag play $OUTPUT &"

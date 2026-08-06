@@ -365,7 +365,7 @@ void ImuProcess::Process(const MeasureGroup &meas,  esekfom::esekf<state_ikfom, 
       if (mean_gyr.norm() > 0.5)
         std::cout << "[WARN] estimated gyro bias " << mean_gyr.norm()
                   << " rad/s is implausibly large for a stationary IMU; "
-                  << "check common.imu_gyr_unit (deg vs rad)" << std::endl;
+                  << "check common.imu_gyr_unit (auto/deg/rad)" << std::endl;
       // ROS_INFO("IMU Initial Done: Gravity: %.4f %.4f %.4f %.4f; state.bias_g: %.4f %.4f %.4f; acc covarience: %.8f %.8f %.8f; gry covarience: %.8f %.8f %.8f",\
       //          imu_state.grav[0], imu_state.grav[1], imu_state.grav[2], mean_acc.norm(), cov_bias_gyr[0], cov_bias_gyr[1], cov_bias_gyr[2], cov_acc[0], cov_acc[1], cov_acc[2], cov_gyr[0], cov_gyr[1], cov_gyr[2]);
       // fout_imu is never written to (the write below is commented out); do not create Log/imu.txt

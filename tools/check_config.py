@@ -16,7 +16,7 @@ Checks:
   - preprocess.lidar_type matches model + ROS version
   - preprocess.scan_line matches model
   - preprocess.timestamp_unit is a valid enum (0-3)
-  - common.imu_gyr_unit is "deg" or "rad"
+  - common.imu_gyr_unit is "auto", "deg", or "rad"
   - preprocess.blind is positive and below mapping.det_range
   - mapping.extrinsic_R is a valid rotation matrix (orthonormal, det ~ 1)
   - mapping.extrinsic_T has 3 elements
@@ -135,8 +135,9 @@ class ConfigChecker:
         val = self._get(cfg, "common.imu_gyr_unit")
         if val is None:
             self._warn("common.imu_gyr_unit missing")
-        elif val not in ("deg", "rad"):
-            self._fail(f"common.imu_gyr_unit='{val}' invalid (must be 'deg' or 'rad')")
+        elif val not in ("auto", "deg", "rad"):
+            self._fail(f"common.imu_gyr_unit='{val}' invalid "
+                       f"(must be 'auto', 'deg', or 'rad')")
         else:
             self._pass(f"common.imu_gyr_unit='{val}' valid")
 

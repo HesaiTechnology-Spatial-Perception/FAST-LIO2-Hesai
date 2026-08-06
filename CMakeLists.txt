@@ -113,11 +113,17 @@ install(TARGETS fastlio_mapping
 )
 
 install(PROGRAMS
+  tools/run_fastlio.sh
   tools/check_input.py
   tools/check_config.py
   tools/check_map.py
   tools/pcap_to_rosbag/pcap_to_rosbag_ros1.sh
   tools/pcap_to_rosbag/pcap_to_rosbag_ros2.sh
+  DESTINATION lib/${PROJECT_NAME}
+)
+
+install(FILES
+  tools/pcap_to_rosbag/common.sh
   DESTINATION lib/${PROJECT_NAME}
 )
 

@@ -5,6 +5,8 @@ All notable changes to the ROS 2 branch. The ROS 1 branch (`main`) keeps its own
 ## [Unreleased]
 
 ### Added
+- `tools/run_fastlio.sh`, a single customer entry point for JT16/JT32/JT128 live, rosbag, and PCAP operation.
+- Unified PCD saving through `tools/run_fastlio.sh --save-map [PATH]`; all models keep background PCD buffering disabled unless saving is requested.
 - `/map_save` service returns explicit results: saved point count and path, or the reason for failure (save disabled / buffer empty / IO error).
 - `pcd_save.leaf_size` (default `0.0` = off): voxel-downsample the accumulated save buffer periodically and on write, bounding memory on long runs.
 - `trajectory_save.tum_en` (default `false`): export the trajectory to `Log/traj_tum.txt` in TUM format (`timestamp x y z qx qy qz qw`) for external evaluation.
@@ -13,6 +15,8 @@ All notable changes to the ROS 2 branch. The ROS 1 branch (`main`) keeps its own
 - GitHub Actions build on `ros:humble-ros-base`; issue and PR templates.
 
 ### Fixed
+- IMU angular-velocity handling now defaults to `common.imu_gyr_unit: "auto"` for JT16, JT32, and JT128. It distinguishes the raw SDK pair (`g`, `deg/s`) from the SI pair (`m/s²`, `rad/s`) using the startup acceleration norm, avoiding map drift across Hesai ROS Driver releases with different unit conversion behavior.
+- IMU samples used during automatic unit detection are retained and converted after detection instead of being dropped, preventing rosbag startup from stalling at LiDAR/IMU synchronization.
 - `pcd_save_en: true` produced no PCD file: the save-buffer accumulation was commented out (inherited from the upstream ROS 2 port), so both the exit-time save and `/map_save` silently wrote nothing.
 - Saving no longer depends on `scan_publish_en`, and `/map_save` no longer requires `map_en`.
 - Out-of-bounds write in runtime-log buffers after ~20 h of continuous operation (`s_plot11[scan_count]`, `MAXN` overflow).
@@ -21,6 +25,9 @@ All notable changes to the ROS 2 branch. The ROS 1 branch (`main`) keeps its own
 - Blind-zone skip loop in feature extraction could read out of bounds when an entire scan was within `blind`.
 
 ### Changed
+
+- Bag and converted-PCAP playback accepts `--play-rate RATE`, pre-detects IMU units before launch, and waits for queued data after playback; map saving no longer rewrites an unchanged PCD during shutdown, and ROS 2 workspace discovery rejects stale installs missing the selected model launch file.
+- Simplified PCAP-to-rosbag conversion to accept a positional PCAP path and automatically discover the model, driver workspace, calibration files, and output path; added `--dry-run` for inspecting the resolved inputs.
 - The expected empty scan right after IMU initialization logs as INFO with an explanation instead of `No point, skip this scan!`.
 - IMU subscription uses `SensorDataQoS` (matches the LiDAR subscription; robust against best-effort publishers).
 - Runtime-log buffers (~66 MB) are allocated only when `runtime_pos_log_enable` is set.

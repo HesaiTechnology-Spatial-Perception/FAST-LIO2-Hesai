@@ -23,7 +23,7 @@ Metrics:
 Each metric maps to a PASS / WARN / FAIL verdict and actionable suggestions.
 
 Usage:
-  python3 tools/check_map.py --pcd PCD/scans.pcd --model jt128
+  python3 tools/check_map.py --pcd ~/slam_ws/src/slam_maps/your_map.pcd --model jt128
   ros2 run fast_lio check_map.py --map-topic /Laser_map --odom-topic /Odometry
   rosrun fast_lio check_map.py --map-topic /Laser_map --odom-topic /Odometry
 
@@ -33,9 +33,12 @@ builtin PCD parser is used otherwise. Thickness analysis is numpy-only.
 
 import argparse
 import math
+import contextlib
+import io
 import struct
 import sys
 import time
+import warnings
 
 try:
     import numpy as np
@@ -45,7 +48,11 @@ except ImportError:
 # optional accelerator for PCD I/O only (broad except: some installs raise
 # ABI errors, not ImportError)
 try:
-    import open3d as o3d
+    # Binary-extension ABI failures can print a long traceback before raising.
+    # Keep the optional fast path silent and fall back to the builtin parser.
+    with warnings.catch_warnings(), contextlib.redirect_stderr(io.StringIO()):
+        warnings.simplefilter("ignore")
+        import open3d as o3d
     HAVE_O3D = True
 except Exception:
     HAVE_O3D = False
